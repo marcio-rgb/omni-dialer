@@ -12,9 +12,7 @@ services:
       - omnichat_network
 
   dialer:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/marcio-rgb/omni-dialer:latest
     container_name: omnichat_dialer
     restart: always
     environment:
