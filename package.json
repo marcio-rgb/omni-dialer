@@ -1,0 +1,23 @@
+{
+  "name": "omnichat-dialer",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js"
+  },
+  "dependencies": {
+    "fastify": "^4.26.0",
+    "@fastify/websocket": "^8.3.0",
+    "ioredis": "^5.4.1",
+    "livekit-server-sdk": "^2.1.0",
+    "axios": "^1.6.7",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "@prisma/client": "^5.10.2",
+    "prisma": "^5.10.2",
+    "ws": "^8.16.0"
+  }
+}

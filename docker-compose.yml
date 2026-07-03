@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  dialer_redis:
+    image: redis:alpine
+    container_name: dialer_redis
+    restart: always
+    command: [ "redis-server", "--appendonly", "yes" ]
+    ports:
+      - "6382:6379"
+    networks:
+      - omnichat_network
+
+  dialer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: omnichat_dialer
+    restart: always
+    environment:
+      - PORT=3001
+      - DATABASE_URL=postgresql://postgres:ojr6DNM25InIg3qoYI4nbUL5Cx04iCiC@db:5432/omnichat_db?schema=public
+      - REDIS_HOST=dialer_redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=""
+      - LIVEKIT_URL=http://omnichat_livekit:7880
+      - LIVEKIT_API_KEY=devkey
+      - LIVEKIT_API_SECRET=secret
+      - VITALPBX_API_URL=http://192.168.1.100/api/v2
+      - VITALPBX_API_KEY=api_key_here
+      - VITALPBX_TRUNK=Local/sip:SHAMPATEL
+      - VITALPBX_CONTEXT=cos-all
+    ports:
+      - "3001:3001"
+    networks:
+      - omnichat_network
+    depends_on:
+      - dialer_redis
+
+networks:
+  omnichat_network:
+    external: true
+    name: omnichat_network

@@ -1,0 +1,373 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Campaign {
+  id             Int      @id @default(autoincrement())
+  name           String
+  dialingMode    String
+  aggressiveness Float    @default(1.0)
+  teamId         String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime
+  Lead           Lead[]
+}
+
+model Disposition {
+  id        Int      @id @default(autoincrement())
+  name      String
+  type      String
+  blockType String?
+  blockDays Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+}
+
+model Lead {
+  id         Int       @id @default(autoincrement())
+  name       String
+  phone1     String
+  phone2     String?
+  phone3     String?
+  extraData  Json?
+  campaignId Int?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime
+  Campaign   Campaign? @relation(fields: [campaignId], references: [id])
+
+  @@index([campaignId])
+}
+
+model businesses {
+  id           String    @id
+  contact_id   String
+  user_id      String
+  pipeline_id  String
+  stage_id     String
+  title        String
+  value        Decimal   @default(0)
+  priority     String    @default("medium")
+  status       String    @default("andamento")
+  loss_reason  String?
+  scheduled_at DateTime?
+  protocol     String?   @unique @db.VarChar(8)
+  created_at   DateTime  @default(now())
+  updated_at   DateTime
+  contacts     contacts  @relation(fields: [contact_id], references: [id])
+  pipelines    pipelines @relation(fields: [pipeline_id], references: [id])
+  stages       stages    @relation(fields: [stage_id], references: [id])
+  users        users     @relation(fields: [user_id], references: [id])
+}
+
+model contact_phones {
+  id              String   @id
+  contact_id      String
+  phone           String
+  created_at      DateTime @default(now())
+  whatsapp_status String?  @default("WI") @db.VarChar(10)
+  contacts        contacts @relation(fields: [contact_id], references: [id], onDelete: Cascade)
+}
+
+model contact_profile_history {
+  id                  String    @id @default(dbgenerated("public.gen_random_uuid()")) @db.Uuid
+  contact_id          String?   @db.Uuid
+  profile_picture_url String?
+  created_at          DateTime? @default(now()) @db.Timestamptz(6)
+
+  @@index([contact_id], map: "idx_contact_profile_history_contact_id")
+}
+
+model contacts {
+  id                  String           @id
+  name                String?
+  email               String?
+  cpf                 String?
+  profile_picture_url String?
+  custom_attributes   Json?            @default("{}")
+  tags                Json?            @default("[]")
+  classification      String           @default("Normal")
+  created_at          DateTime         @default(now())
+  updated_at          DateTime
+  is_system           Boolean?         @default(false)
+  businesses          businesses[]
+  contact_phones      contact_phones[]
+  conversations       conversations[]
+  contact_extids      contact_extids[]
+  call_histories      call_history[]
+}
+
+model conversation_transfer_logs {
+  id                                                          String        @id @default(dbgenerated("public.gen_random_uuid()")) @db.Uuid
+  conversation_id                                             String
+  action_user_id                                              String?
+  source_user_id                                              String?
+  destination_user_id                                         String?
+  messages_snapshot                                           Json?         @default("[]")
+  created_at                                                  DateTime?     @default(now()) @db.Timestamptz(6)
+  action_type                                                 String?
+  source_inbox_id                                             String?
+  destination_inbox_id                                        String?
+  origin                                                      String?
+  users_conversation_transfer_logs_action_user_idTousers      users?        @relation("conversation_transfer_logs_action_user_idTousers", fields: [action_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  conversations                                               conversations @relation(fields: [conversation_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_conversation_transfer_logs_destination_user_idTousers users?        @relation("conversation_transfer_logs_destination_user_idTousers", fields: [destination_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  users_conversation_transfer_logs_source_user_idTousers      users?        @relation("conversation_transfer_logs_source_user_idTousers", fields: [source_user_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model conversations {
+  id                         String                       @id
+  inbox_id                   String
+  contact_id                 String
+  status                     String                       @default("open")
+  assigned_to                String?
+  unread_count               Int                          @default(0)
+  created_at                 DateTime                     @default(now())
+  updated_at                 DateTime
+  last_message_at            DateTime                     @default(now())
+  phone_number               String?                      @db.VarChar(50)
+  contact_phone              String?                      @db.VarChar(50)
+  last_message_content       String?
+  latest_message_at          DateTime?                    @db.Timestamptz(6)
+  is_deleted                 Boolean                      @default(false)
+  conversation_transfer_logs conversation_transfer_logs[]
+  contacts                   contacts                     @relation(fields: [contact_id], references: [id])
+  inboxes                    inboxes                      @relation(fields: [inbox_id], references: [id])
+  messages                   messages[]
+  calls                      calls[]
+}
+
+model external_services {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name          String    @db.VarChar(255)
+  type          String    @db.VarChar(100)
+  url           String    @db.VarChar(1024)
+  auth_user     String?   @db.VarChar(255)
+  auth_password String?   @db.VarChar(255)
+  parameters    Json?     @default("[]")
+  scope         String?   @db.VarChar(255) @default("")
+  created_at    DateTime? @default(now()) @db.Timestamptz(6)
+  updated_at    DateTime? @default(now()) @db.Timestamptz(6)
+}
+
+model guru_missions {
+  id             String    @id @default(dbgenerated("uuid_generate_v4()")) @db.Uuid
+  name           String    @db.VarChar(255)
+  prompt         String
+  messages_scope String?   @default("selected") @db.VarChar(50)
+  llm            String    @db.VarChar(100)
+  is_active      Boolean?  @default(true)
+  created_at     DateTime? @default(now()) @db.Timestamptz(6)
+  initial_text   String?
+}
+
+model inbox_users {
+  inbox_id String
+  user_id  String
+  inboxes  inboxes @relation(fields: [inbox_id], references: [id], onDelete: Cascade)
+  users    users   @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([inbox_id, user_id])
+}
+
+model inboxes {
+  id                  String          @id
+  name                String
+  channel_type        String
+  config              Json?
+  webhook_url         String?
+  is_active           Boolean         @default(true)
+  created_at          DateTime        @default(now())
+  profile_picture_url String?
+  color               String?
+  master_user_id      String?
+  conversations       conversations[]
+  inbox_users         inbox_users[]
+  team_inboxes        team_inboxes[]
+}
+
+model messages {
+  id              String        @id @default(dbgenerated("uuid_generate_v4()"))
+  conversation_id String
+  sender_type     String
+  sender_id       String?
+  content         String?
+  content_type    String        @default("text")
+  status          String        @default("sent")
+  metadata        Json?         @default("{}")
+  scheduled_at    DateTime?
+  created_at      DateTime      @default(now())
+  is_deleted      Boolean       @default(false)
+  from_me         Boolean       @default(false)
+  participant     String?       @db.VarChar(255)
+  is_private      Boolean       @default(false)
+  conversations   conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+}
+
+model pipelines {
+  id         String       @id
+  name       String
+  type       String       @default("comercial") @db.VarChar(50)
+  is_default Boolean      @default(false)
+  team_id    String?
+  created_at DateTime     @default(now())
+  businesses businesses[]
+  stages     stages[]
+  teams      teams?       @relation(fields: [team_id], references: [id], onDelete: SetNull)
+}
+
+model settings {
+  key         String    @id @db.VarChar(255)
+  value       String?
+  description String?
+  is_secret   Boolean?  @default(false)
+  created_at  DateTime? @default(now()) @db.Timestamp(6)
+  updated_at  DateTime? @default(now()) @db.Timestamp(6)
+}
+
+model stages {
+  id          String       @id
+  pipeline_id String
+  name        String
+  color       String?
+  order_index Int          @default(0)
+  created_at  DateTime     @default(now())
+  businesses  businesses[]
+  pipelines   pipelines    @relation(fields: [pipeline_id], references: [id], onDelete: Cascade)
+}
+
+model team_inboxes {
+  team_id     String
+  inbox_id    String
+  assigned_at DateTime @default(now())
+  inboxes     inboxes  @relation(fields: [inbox_id], references: [id], onDelete: Cascade)
+  teams       teams    @relation(fields: [team_id], references: [id], onDelete: Cascade)
+
+  @@id([team_id, inbox_id])
+}
+
+model team_managers {
+  team_id     String
+  user_id     String
+  assigned_at DateTime @default(now())
+  teams       teams    @relation(fields: [team_id], references: [id], onDelete: Cascade)
+  users       users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([team_id, user_id])
+}
+
+model team_users {
+  team_id   String
+  user_id   String
+  joined_at DateTime @default(now())
+  teams     teams    @relation(fields: [team_id], references: [id], onDelete: Cascade)
+  users     users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@id([team_id, user_id])
+}
+
+model teams {
+  id            String          @id
+  name          String
+  description   String?
+  created_at    DateTime        @default(now())
+  updated_at    DateTime
+  team_inboxes  team_inboxes[]
+  team_managers team_managers[]
+  team_users    team_users[]
+  pipelines     pipelines[]
+}
+
+model users {
+  id                                                                               String                       @id
+  name                                                                             String
+  email                                                                            String                       @unique
+  password                                                                         String
+  role                                                                             String                       @default("agent")
+  created_at                                                                       DateTime                     @default(now())
+  is_active                                                                        Boolean                      @default(true)
+  phone                                                                            String?
+  profile_picture_url                                                              String?
+  ramal                                                                            String?                      @db.VarChar(10)
+  numero_externo                                                                   String?                      @db.VarChar(20)
+  businesses                                                                       businesses[]
+  conversation_transfer_logs_conversation_transfer_logs_action_user_idTousers      conversation_transfer_logs[] @relation("conversation_transfer_logs_action_user_idTousers")
+  conversation_transfer_logs_conversation_transfer_logs_destination_user_idTousers conversation_transfer_logs[] @relation("conversation_transfer_logs_destination_user_idTousers")
+  conversation_transfer_logs_conversation_transfer_logs_source_user_idTousers      conversation_transfer_logs[] @relation("conversation_transfer_logs_source_user_idTousers")
+  inbox_users                                                                      inbox_users[]
+  team_managers                                                                    team_managers[]
+  team_users                                                                       team_users[]
+  user_goals                                                                       user_goals[]
+  calls                                                                            calls[]
+  agent_status                                                                     String?                      @default("pausa") @db.VarChar(50)
+  agent_status_reason                                                              String?                      @db.VarChar(100)
+  call_histories                                                                   call_history[]
+}
+
+model user_goals {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id         String
+  year            Int
+  week_number     Int
+  venda_target    Decimal  @default(0) @db.Decimal(12, 2)
+  gerados_target  Int      @default(0)
+  proposta_target Int      @default(0)
+  novos_target    Int      @default(0)
+  created_at      DateTime @default(now()) @db.Timestamptz(6)
+  updated_at      DateTime @default(now()) @db.Timestamptz(6)
+  users           users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@unique([user_id, year, week_number], map: "uq_user_weekly_goal")
+}
+
+model webhooks {
+  id         String   @id
+  url        String
+  events     String[]
+  is_active  Boolean  @default(true)
+  inbox_id   String?
+  created_at DateTime @default(now())
+}
+
+model contact_extids {
+  id          String    @id
+  contact_id  String?
+  external_id String    @unique
+  ext_type    String?
+  origin      String?
+  created_at  DateTime? @default(now()) @db.Timestamptz(6)
+  contacts    contacts? @relation(fields: [contact_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([contact_id])
+}
+
+model calls {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  conversation_id String
+  room_name       String        @unique
+  status          String        @default("pending") // pending, active, completed, missed, rejected
+  agent_id        String
+  created_at      DateTime      @default(now()) @db.Timestamptz(6)
+  ended_at        DateTime?     @db.Timestamptz(6)
+  recording_url   String?       @db.VarChar(1024) // Destinado a futuras integrações com LiveKit Egress
+
+  conversations   conversations @relation(fields: [conversation_id], references: [id], onDelete: Cascade)
+  users           users         @relation(fields: [agent_id], references: [id])
+}
+
+model call_history {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cliente_id    String
+  agente_id     String
+  data_inicio   DateTime  @default(now()) @db.Timestamptz(6)
+  duracao       Int       @default(0)
+  status        String    @db.VarChar(50) // Atendida, Incompleta, Abandono
+  url_gravacao  String?   @db.VarChar(1024)
+
+  contacts      contacts  @relation(fields: [cliente_id], references: [id], onDelete: Cascade)
+  users         users     @relation(fields: [agente_id], references: [id], onDelete: Cascade)
+}
