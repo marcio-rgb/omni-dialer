@@ -10,6 +10,8 @@ import redisClient from './config/redis.js';
 import callsRouter from './routes/calls.js';
 import { PredictiveEngine } from './services/PredictiveEngine.js';
 
+import fastifyCors from '@fastify/cors';
+
 dotenv.config();
 
 const fastify = Fastify({ 
@@ -18,24 +20,15 @@ const fastify = Fastify({
     } 
 });
 
+// Register CORS plugin
+await fastify.register(fastifyCors, {
+    origin: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+});
+
 // Register native WebSockets plugin
 await fastify.register(fastifyWebsocket);
-
-// CORS hook to allow requests from client origin
-fastify.addHook('onRequest', async (request, reply) => {
-    const origin = request.headers.origin;
-    if (origin) {
-        reply.header('Access-Control-Allow-Origin', origin);
-    } else {
-        reply.header('Access-Control-Allow-Origin', '*');
-    }
-    reply.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    reply.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-    if (request.method === 'OPTIONS') {
-        reply.code(204).send();
-        return reply;
-    }
-});
 
 // Register routes plugin under prefix '/api/v1/calls'
 // This will map the WS endpoint to: ws://localhost:3001/api/v1/calls/ws
