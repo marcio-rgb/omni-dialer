@@ -41,6 +41,7 @@ services:
     deploy:
       labels:
         - "traefik.enable=true"
+        - "traefik.docker.network=minha_rede"
         - "traefik.http.routers.omnichat-dialer.rule=Host(`api-omnichat.creditobr.org`) && PathPrefix(`/api/v1/calls`)"
         - "traefik.http.routers.omnichat-dialer.entrypoints=websecure"
         - "traefik.http.routers.omnichat-dialer.tls=true"
