@@ -38,6 +38,19 @@ services:
       - minha_rede
     depends_on:
       - dialer_redis
+    deploy:
+      labels:
+        - "traefik.enable=true"
+        - "traefik.http.routers.omnichat-dialer.rule=Host(`api-omnichat.creditobr.org`) && PathPrefix(`/api/v1/calls`)"
+        - "traefik.http.routers.omnichat-dialer.entrypoints=websecure"
+        - "traefik.http.routers.omnichat-dialer.tls=true"
+        - "traefik.http.routers.omnichat-dialer.tls.certresolver=letsencryptresolver"
+        - "traefik.http.services.omnichat-dialer.loadbalancer.server.port=3001"
+      placement:
+        constraints:
+          - node.role == manager
+      restart_policy:
+        condition: on-failure
 
 networks:
   minha_rede:
