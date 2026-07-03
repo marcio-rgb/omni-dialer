@@ -289,7 +289,8 @@ export default async function callRoutes(fastify, opts) {
             console.log(`[ManualWebRTC] Triggering manual WebRTC call via AMI to ${dialedPhone} for Room ${roomName} (Agent: ${agentId})`);
 
             // Check if we are in local development
-            let destData = `PJSIP/livekit-sip/sip:${roomName}@livekit-sip:5060`;
+            const sipHost = process.env.LIVEKIT_SIP_HOST || 'livekit-sip:5060';
+            let destData = `PJSIP/livekit-sip/sip:${roomName}@${sipHost}`;
             const lkUrl = process.env.LIVEKIT_URL || '';
             if (lkUrl.includes('localhost') || lkUrl.includes('127.0.0.1') || lkUrl.includes('omnichat_livekit')) {
                 try {

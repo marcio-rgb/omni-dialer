@@ -24,6 +24,7 @@ services:
       - LIVEKIT_URL=http://${LIVEKIT_HOST:-livekit}:7880
       - LIVEKIT_API_KEY=devkey
       - LIVEKIT_API_SECRET=secret
+      - LIVEKIT_SIP_HOST=live.creditobr.org:5060
       - VITALPBX_API_URL=https://px.creditobr.com.br/api/v2
       - VITALPBX_API_KEY=8302cc7693df6b3795f01ad15d616e11
       - VITALPBX_TRUNK=Local/sip:SHAMPATEL
@@ -32,7 +33,7 @@ services:
       - AMI_PORT=5038
       - AMI_USER=Omnichat
       - AMI_SECRET=ypnqYP7EHNtYFkqww23243rwew423
-      - UPDATE_TIMESTAMP=1783073400
+      - UPDATE_TIMESTAMP=1783081100
     ports:
       - "3001:3001"
     networks:
