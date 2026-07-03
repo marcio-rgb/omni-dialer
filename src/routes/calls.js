@@ -290,7 +290,7 @@ export default async function callRoutes(fastify, opts) {
 
             // Check if we are in local development
             const sipHost = process.env.LIVEKIT_SIP_HOST || 'livekit-sip:5060';
-            let destData = `PJSIP/livekit-sip/sip:${roomName}@${sipHost}`;
+            let destData = `PJSIP/anonymous/sip:${roomName}@${sipHost}`;
             const lkUrl = process.env.LIVEKIT_URL || '';
             if (lkUrl.includes('localhost') || lkUrl.includes('127.0.0.1') || lkUrl.includes('omnichat_livekit')) {
                 try {
