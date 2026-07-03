@@ -17,17 +17,21 @@ services:
     restart: always
     environment:
       - PORT=3001
-      - DATABASE_URL=postgresql://postgres:ojr6DNM25InIg3qoYI4nbUL5Cx04iCiC@db:5432/omnichat_db?schema=public
+      - DATABASE_URL=postgresql://postgres:ojr6DNM25InIg3qoYI4nbUL5Cx04iCiC@${DB_HOST:-postgres}:5432/omnichat_db?schema=public
       - REDIS_HOST=dialer_redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=""
-      - LIVEKIT_URL=http://omnichat_livekit:7880
+      - LIVEKIT_URL=http://${LIVEKIT_HOST:-livekit}:7880
       - LIVEKIT_API_KEY=devkey
       - LIVEKIT_API_SECRET=secret
-      - VITALPBX_API_URL=http://192.168.1.100/api/v2
-      - VITALPBX_API_KEY=api_key_here
+      - VITALPBX_API_URL=https://px.creditobr.com.br/api/v2
+      - VITALPBX_API_KEY=8302cc7693df6b3795f01ad15d616e11
       - VITALPBX_TRUNK=Local/sip:SHAMPATEL
       - VITALPBX_CONTEXT=cos-all
+      - AMI_HOST=px.creditobr.com.br
+      - AMI_PORT=5038
+      - AMI_USER=Omnichat
+      - AMI_SECRET=ypnqYP7EHNtYFkqww23243rwew423
     ports:
       - "3001:3001"
     networks:
