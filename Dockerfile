@@ -3,6 +3,9 @@ FROM node:20-slim AS builder
 
 WORKDIR /app
 
+# Install openssl for Prisma client generation
+RUN apt-get update -y && apt-get install -y openssl
+
 # Copy package definitions and prisma schema
 COPY package*.json ./
 COPY prisma ./prisma/
@@ -15,6 +18,9 @@ RUN npx prisma generate
 FROM node:20-slim
 
 WORKDIR /app
+
+# Install openssl in the production runtime environment
+RUN apt-get update -y && apt-get install -y openssl
 
 # Copy runtime dependencies and Prisma client
 COPY --from=builder /app/node_modules ./node_modules
