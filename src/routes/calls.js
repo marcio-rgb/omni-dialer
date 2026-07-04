@@ -290,14 +290,15 @@ export default async function callRoutes(fastify, opts) {
 
             // Check if we are in local development
             const sipHost = process.env.LIVEKIT_SIP_HOST || 'livekit-sip:5060';
-            let destData = `PJSIP/anonymous/sip:${roomName}@${sipHost}`;
+            const sipTrunk = process.env.LIVEKIT_SIP_TRUNK || 'anonymous';
+            let destData = `PJSIP/${sipTrunk}/sip:${roomName}@${sipHost}`;
             const lkUrl = process.env.LIVEKIT_URL || '';
             if (lkUrl.includes('localhost') || lkUrl.includes('127.0.0.1') || lkUrl.includes('omnichat_livekit')) {
                 try {
                     const ipRes = await fetch('https://api.ipify.org');
                     if (ipRes.ok) {
                         const publicIp = (await ipRes.text()).trim();
-                        destData = `PJSIP/anonymous/sip:${roomName}@${publicIp}:5065`;
+                        destData = `PJSIP/${sipTrunk}/sip:${roomName}@${publicIp}:5065`;
                         console.log(`[ManualWebRTC] Local development detected. Dialing via public IP: ${destData}`);
                     }
                 } catch (ipErr) {
