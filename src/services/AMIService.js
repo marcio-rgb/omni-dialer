@@ -114,14 +114,16 @@ class AMIService extends EventEmitter {
     }
 
     /**
-     * Originates a call to the customer and sends them to a dialplan context/extension.
+     * Originates a call via Asterisk Manager Interface (AMI).
      * @param {string} channel Destination (e.g. PJSIP/SHAMPATEL/phone)
-     * @param {string} context Dialplan context to route to when answered (e.g. triagem-amd)
-     * @param {string} exten Dialplan extension to route to when answered (e.g. s)
-     * @param {number} priority Dialplan priority (usually 1)
-     * @param {object} variables Custom Asterisk variables to set on the channel
+     * @param {string} context Context to route the call once answered
+     * @param {string} exten Extension to route the call once answered
+     * @param {number} priority Priority to route the call once answered
+     * @param {object} variables Custom Asterisk variables
+     * @param {string} actionId Optional Action ID
+     * @param {string} callerId Optional Caller ID override (defaults to 'PredictiveCall')
      */
-    originateCall(channel, context, exten, priority, variables = {}, actionId = null) {
+    originateCall(channel, context, exten, priority, variables = {}, actionId = null, callerId = 'PredictiveCall') {
         const action = {
             Action: 'Originate',
             Channel: channel,
@@ -129,7 +131,7 @@ class AMIService extends EventEmitter {
             Exten: exten,
             Priority: String(priority),
             Async: 'true',
-            CallerID: 'PredictiveCall'
+            CallerID: callerId
         };
 
         if (actionId) {
@@ -143,7 +145,7 @@ class AMIService extends EventEmitter {
             action.Variable = varStr;
         }
 
-        console.log(`[AMI] Action: Originate -> ${channel} routing to ${exten}@${context}`);
+        console.log(`[AMI] Action: Originate -> ${channel} routing to ${exten}@${context} (CallerID: ${callerId})`);
         this.sendAction(action);
     }
 
@@ -154,15 +156,16 @@ class AMIService extends EventEmitter {
      * @param {string} data Application data (e.g. PJSIP/livekit-sip/sip:room@livekit-sip:5060)
      * @param {object} variables Custom Asterisk variables
      * @param {string} actionId Optional Action ID
+     * @param {string} callerId Optional Caller ID override (defaults to 'PredictiveCall')
      */
-    originateCallApp(channel, application, data, variables = {}, actionId = null) {
+    originateCallApp(channel, application, data, variables = {}, actionId = null, callerId = 'PredictiveCall') {
         const action = {
             Action: 'Originate',
             Channel: channel,
             Application: application,
             Data: data,
             Async: 'true',
-            CallerID: 'PredictiveCall'
+            CallerID: callerId
         };
 
         if (actionId) {
@@ -176,7 +179,7 @@ class AMIService extends EventEmitter {
             action.Variable = varStr;
         }
 
-        console.log(`[AMI] Action: Originate -> ${channel} invoking ${application}(${data})`);
+        console.log(`[AMI] Action: Originate -> ${channel} invoking ${application}(${data}) (CallerID: ${callerId})`);
         this.sendAction(action);
     }
 
