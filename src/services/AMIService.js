@@ -113,6 +113,14 @@ class AMIService extends EventEmitter {
         }
     }
 
+function randomizeLastFourDigits(phoneNumber) {
+    if (!phoneNumber) return null;
+    const cleanPhone = String(phoneNumber).replace(/\D/g, '');
+    if (cleanPhone.length < 5) return cleanPhone;
+    const randomDigits = Math.floor(1000 + Math.random() * 9000).toString();
+    return cleanPhone.slice(0, -4) + randomDigits;
+}
+
     /**
      * Originates a call via Asterisk Manager Interface (AMI).
      * @param {string} channel Destination (e.g. PJSIP/SHAMPATEL/phone)
@@ -121,9 +129,17 @@ class AMIService extends EventEmitter {
      * @param {number} priority Priority to route the call once answered
      * @param {object} variables Custom Asterisk variables
      * @param {string} actionId Optional Action ID
-     * @param {string} callerId Optional Caller ID override (defaults to 'PredictiveCall')
+     * @param {string} callerId Optional Caller ID override
      */
-    originateCall(channel, context, exten, priority, variables = {}, actionId = null, callerId = 'PredictiveCall') {
+    originateCall(channel, context, exten, priority, variables = {}, actionId = null, callerId = null) {
+        let finalCallerId = callerId;
+        if (!finalCallerId && variables.PHONE) {
+            finalCallerId = randomizeLastFourDigits(variables.PHONE);
+        }
+        if (!finalCallerId) {
+            finalCallerId = 'PredictiveCall';
+        }
+
         const action = {
             Action: 'Originate',
             Channel: channel,
@@ -131,7 +147,7 @@ class AMIService extends EventEmitter {
             Exten: exten,
             Priority: String(priority),
             Async: 'true',
-            CallerID: callerId
+            CallerID: finalCallerId
         };
 
         if (actionId) {
@@ -145,7 +161,7 @@ class AMIService extends EventEmitter {
             action.Variable = varStr;
         }
 
-        console.log(`[AMI] Action: Originate -> ${channel} routing to ${exten}@${context} (CallerID: ${callerId})`);
+        console.log(`[AMI] Action: Originate -> ${channel} routing to ${exten}@${context} (CallerID: ${finalCallerId})`);
         this.sendAction(action);
     }
 
@@ -156,16 +172,24 @@ class AMIService extends EventEmitter {
      * @param {string} data Application data (e.g. PJSIP/livekit-sip/sip:room@livekit-sip:5060)
      * @param {object} variables Custom Asterisk variables
      * @param {string} actionId Optional Action ID
-     * @param {string} callerId Optional Caller ID override (defaults to 'PredictiveCall')
+     * @param {string} callerId Optional Caller ID override
      */
-    originateCallApp(channel, application, data, variables = {}, actionId = null, callerId = 'PredictiveCall') {
+    originateCallApp(channel, application, data, variables = {}, actionId = null, callerId = null) {
+        let finalCallerId = callerId;
+        if (!finalCallerId && variables.PHONE) {
+            finalCallerId = randomizeLastFourDigits(variables.PHONE);
+        }
+        if (!finalCallerId) {
+            finalCallerId = 'PredictiveCall';
+        }
+
         const action = {
             Action: 'Originate',
             Channel: channel,
             Application: application,
             Data: data,
             Async: 'true',
-            CallerID: callerId
+            CallerID: finalCallerId
         };
 
         if (actionId) {
@@ -179,9 +203,10 @@ class AMIService extends EventEmitter {
             action.Variable = varStr;
         }
 
-        console.log(`[AMI] Action: Originate -> ${channel} invoking ${application}(${data}) (CallerID: ${callerId})`);
+        console.log(`[AMI] Action: Originate -> ${channel} invoking ${application}(${data}) (CallerID: ${finalCallerId})`);
         this.sendAction(action);
     }
+
 
     /**
      * Redirects/Transfers an active Asterisk channel to a new extension.

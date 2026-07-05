@@ -258,8 +258,7 @@ export default async function callRoutes(fastify, opts) {
                     AGENT_ID: String(agentId),
                     PHONE: dialedPhone
                 },
-                `manual_${agentId}_${Date.now()}`,
-                dialedPhone
+                `manual_${agentId}_${Date.now()}`
             );
 
             return {
@@ -307,12 +306,6 @@ export default async function callRoutes(fastify, opts) {
                 }
             }
             
-            const agent = await prisma.users.findUnique({
-                where: { id: agentId },
-                select: { ramal: true }
-            });
-            const callerId = agent?.ramal ? `Agent_${agent.ramal}` : 'PredictiveCall';
-
             amiService.originateCallApp(
                 `Local/${dialedPhone}@cos-all`,
                 'Dial',
@@ -321,8 +314,7 @@ export default async function callRoutes(fastify, opts) {
                     AGENT_ID: String(agentId),
                     PHONE: dialedPhone
                 },
-                `webrtc_${agentId}_${Date.now()}`,
-                callerId
+                `webrtc_${agentId}_${Date.now()}`
             );
 
             return { success: true };
