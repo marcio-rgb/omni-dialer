@@ -2,6 +2,15 @@ import net from 'net';
 import EventEmitter from 'events';
 import amiConfig from '../config/ami.js';
 
+function randomizeLastFourDigits(phoneNumber) {
+    if (!phoneNumber) return null;
+    const cleanPhone = String(phoneNumber).replace(/\D/g, '');
+    if (cleanPhone.length < 5) return cleanPhone;
+    const randomDigits = Math.floor(1000 + Math.random() * 9000).toString();
+    return cleanPhone.slice(0, -4) + randomDigits;
+}
+
+
 class AMIService extends EventEmitter {
     constructor() {
         super();
@@ -113,13 +122,6 @@ class AMIService extends EventEmitter {
         }
     }
 
-function randomizeLastFourDigits(phoneNumber) {
-    if (!phoneNumber) return null;
-    const cleanPhone = String(phoneNumber).replace(/\D/g, '');
-    if (cleanPhone.length < 5) return cleanPhone;
-    const randomDigits = Math.floor(1000 + Math.random() * 9000).toString();
-    return cleanPhone.slice(0, -4) + randomDigits;
-}
 
     /**
      * Originates a call via Asterisk Manager Interface (AMI).
