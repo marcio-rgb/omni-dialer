@@ -381,7 +381,7 @@ export default async function callRoutes(fastify, opts) {
             // 4. Trigger manual originate command via AMI
             // Dials the agent's ramal first, and upon answering, dials the customer via cos-all
             amiService.originateCall(
-                `Local/${agent.ramal}@cos-all`,
+                `Local/${agent.ramal}@cos-all/n`,
                 'cos-all',
                 dialedPhone,
                 1,
@@ -444,7 +444,7 @@ export default async function callRoutes(fastify, opts) {
             }
             
             amiService.originateCallApp(
-                `Local/${dialedPhone}@cos-all`,
+                `Local/${dialedPhone}@cos-all/n`,
                 'Dial',
                 destData,
                 {

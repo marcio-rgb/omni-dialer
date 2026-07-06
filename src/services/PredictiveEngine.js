@@ -166,7 +166,7 @@ export class PredictiveEngine {
                 }
 
                 // Dials customer via AMI and routes to triagem-amd context
-                const destChannel = `Local/${dialedPhone}@${vitalpbxConfig.context}`;
+                const destChannel = `Local/${dialedPhone}@${vitalpbxConfig.context}/n`;
                 
                 amiService.originateCall(
                     destChannel,
