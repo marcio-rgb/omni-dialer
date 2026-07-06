@@ -106,6 +106,18 @@ export default async function callRoutes(fastify, opts) {
                     console.log(`[AMI] Mapping manual call Uniqueid ${uniqueId} to Agent ${agentId}`);
                     try {
                         await redisClient.set(`dialer:manual_call_agent:${uniqueId}`, agentId, 'EX', 7200);
+                        
+                        // Link Uniqueid to manual call details (roomName, phone)
+                        const infoStr = await redisClient.get(`dialer:manual_call_info:${agentId}`);
+                        if (infoStr) {
+                            const info = JSON.parse(infoStr);
+                            await redisClient.hset(`dialer:manual_calls:${uniqueId}`, {
+                                agentId: agentId,
+                                roomName: info.roomName,
+                                phone: info.phone
+                            });
+                            await redisClient.expire(`dialer:manual_calls:${uniqueId}`, 7200);
+                        }
                     } catch (err) {
                         console.error('[AMI] Error saving manual call mapping to Redis:', err.message);
                     }
@@ -113,6 +125,34 @@ export default async function callRoutes(fastify, opts) {
             }
         }
     });
+
+    async function handleCallRecording(uniqueId) {
+        console.log(`[Recording] Notifying OmniChat backend about Hangup for uniqueId: ${uniqueId}`);
+        try {
+            let roomName = null;
+            let phone = null;
+
+            // Check if it is a manual WebRTC call
+            const manualCallInfo = await redisClient.hgetall(`dialer:manual_calls:${uniqueId}`);
+            if (manualCallInfo && manualCallInfo.roomName) {
+                roomName = manualCallInfo.roomName;
+                phone = manualCallInfo.phone;
+                // Clean up Redis mapping
+                await redisClient.del(`dialer:manual_calls:${uniqueId}`);
+            }
+
+            const chatServerUrl = process.env.DIALER_OMNICHAT_SERVER_URL || 'http://server:3000';
+            console.log(`[Recording] Posting to: ${chatServerUrl}/api/v1/calls/process-recording`);
+            
+            await axios.post(`${chatServerUrl}/api/v1/calls/process-recording`, {
+                uniqueId,
+                roomName,
+                phone
+            });
+        } catch (err) {
+            console.error(`[Recording] Failed to notify OmniChat about recording for uniqueId ${uniqueId}:`, err.message);
+        }
+    }
 
     // Listen to Hangup events to detect when a manual call ends
     amiService.on('Hangup', async (event) => {
@@ -155,6 +195,12 @@ export default async function callRoutes(fastify, opts) {
                     }));
                 }
             }
+
+            // Immediately notify OmniChat backend to process recording (delegated to Bull queue)
+            handleCallRecording(uniqueId).catch(recErr => {
+                console.error(`[Recording] Error triggering call recording processing for uniqueId ${uniqueId}:`, recErr.message);
+            });
+
         } catch (err) {
             console.error(`[AMI] Error processing Hangup event for Uniqueid ${uniqueId}:`, err.message);
         }
@@ -372,6 +418,12 @@ export default async function callRoutes(fastify, opts) {
         try {
             const dialedPhone = await getDialedPhoneWithPrefix(phone);
             console.log(`[ManualWebRTC] Triggering manual WebRTC call via AMI to ${dialedPhone} for Room ${roomName} (Agent: ${agentId})`);
+
+            // Save roomName and phone to Redis keyed by agentId for mapping in OriginateResponse
+            await redisClient.set(`dialer:manual_call_info:${agentId}`, JSON.stringify({
+                roomName,
+                phone: dialedPhone
+            }), 'EX', 600); // 10 minutes TTL
 
             // Check if we are in local development
             const sipHost = process.env.LIVEKIT_SIP_HOST || 'livekit-sip:5060';
