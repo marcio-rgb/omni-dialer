@@ -34,6 +34,33 @@ async function getDialedPhoneWithPrefix(phone) {
     return dialedPhone;
 }
 
+function getHangupCauseMessage(causeCode, causeText) {
+    const code = parseInt(causeCode);
+    switch (code) {
+        case 16:
+            return 'Chamada encerrada.';
+        case 17:
+            return 'O número de destino está ocupado.';
+        case 18:
+        case 19:
+            return 'O cliente não atendeu a chamada (sem resposta).';
+        case 21:
+            return 'A chamada foi rejeitada pelo destinatário.';
+        case 1:
+        case 28:
+            return 'O número discado é inexistente ou inválido.';
+        case 27:
+            return 'O destino está fora de serviço.';
+        case 34:
+        case 38:
+        case 41:
+        case 42:
+            return 'Falha na rede de telefonia ou linha congestionada.';
+        default:
+            return causeText || 'Chamada finalizada.';
+    }
+}
+
 export default async function callRoutes(fastify, opts) {
     // Listen to OriginateResponse to handle call failures and notify agents
     amiService.on('OriginateResponse', async (event) => {
@@ -45,33 +72,91 @@ export default async function callRoutes(fastify, opts) {
         const isManual = actionId.startsWith('manual_');
         const isWebRTC = actionId.startsWith('webrtc_');
 
-        if ((isManual || isWebRTC) && event.Response === 'Failure') {
+        if (isManual || isWebRTC) {
             const parts = actionId.split('_');
             const agentId = parts[1];
 
-            // 1. Reset agent status to "disponivel" in DB so they are not stuck
-            try {
+            if (event.Response === 'Failure') {
+                // 1. Reset agent status to "disponivel" in DB so they are not stuck
+                try {
+                    await prisma.users.update({
+                        where: { id: agentId },
+                        data: {
+                            agent_status: 'disponivel',
+                            agent_status_reason: 'Call Failed'
+                        }
+                    });
+                } catch (err) {
+                    console.error(`[AMI] Error updating agent status on fail:`, err.message);
+                }
+
+                // 2. Notify the agent via WebSocket
+                const socket = activeSockets.get(agentId);
+                if (socket && socket.readyState === 1) {
+                    socket.send(JSON.stringify({
+                        event: 'agent.error',
+                        data: {
+                            message: 'A chamada falhou. Verifique o número ou tente novamente.'
+                        }
+                    }));
+                }
+            } else if (event.Response === 'Success') {
+                const uniqueId = event.Uniqueid;
+                if (uniqueId) {
+                    console.log(`[AMI] Mapping manual call Uniqueid ${uniqueId} to Agent ${agentId}`);
+                    try {
+                        await redisClient.set(`dialer:manual_call_agent:${uniqueId}`, agentId, 'EX', 7200);
+                    } catch (err) {
+                        console.error('[AMI] Error saving manual call mapping to Redis:', err.message);
+                    }
+                }
+            }
+        }
+    });
+
+    // Listen to Hangup events to detect when a manual call ends
+    amiService.on('Hangup', async (event) => {
+        const uniqueId = event.Uniqueid;
+        if (!uniqueId) return;
+
+        try {
+            // Check if this Uniqueid is mapped to a manual call agent
+            const agentId = await redisClient.get(`dialer:manual_call_agent:${uniqueId}`);
+            if (agentId) {
+                console.log(`[AMI] Hangup received for manual call channel ${event.Channel} (Uniqueid: ${uniqueId}) associated with Agent ${agentId}. Cause: ${event.Cause} (${event['Cause-txt']})`);
+                
+                // Remove the mapping
+                await redisClient.del(`dialer:manual_call_agent:${uniqueId}`);
+
+                // 1. Reset agent status to "disponivel" in DB
                 await prisma.users.update({
                     where: { id: agentId },
                     data: {
                         agent_status: 'disponivel',
-                        agent_status_reason: 'Call Failed'
+                        agent_status_reason: 'Call Ended'
                     }
                 });
-            } catch (err) {
-                console.error(`[AMI] Error updating agent status on fail:`, err.message);
-            }
 
-            // 2. Notify the agent via WebSocket
-            const socket = activeSockets.get(agentId);
-            if (socket && socket.readyState === 1) {
-                socket.send(JSON.stringify({
-                    event: 'agent.error',
-                    data: {
-                        message: 'A chamada falhou. Verifique o número ou tente novamente.'
-                    }
-                }));
+                // 2. Translate cause code to user-friendly message
+                const causeCode = event.Cause || '16';
+                const causeText = event['Cause-txt'] || '';
+                const message = getHangupCauseMessage(causeCode, causeText);
+
+                // 3. Notify the agent via WebSocket
+                const socket = activeSockets.get(agentId);
+                if (socket && socket.readyState === 1) {
+                    socket.send(JSON.stringify({
+                        event: 'agent.call_ended',
+                        data: {
+                            message: message,
+                            causeCode: String(causeCode),
+                            causeText: causeText
+                        }
+                    }));
+                }
             }
+        } catch (err) {
+            console.error(`[AMI] Error processing Hangup event for Uniqueid ${uniqueId}:`, err.message);
         }
     });
 
