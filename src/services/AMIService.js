@@ -1,10 +1,17 @@
 import net from 'net';
 import EventEmitter from 'events';
 import amiConfig from '../config/ami.js';
+import prisma from '../config/db.js';
 
-function randomizeLastFourDigits(phoneNumber) {
+function randomizeLastFourDigits(phoneNumber, prefix = '') {
     if (!phoneNumber) return null;
-    const cleanPhone = String(phoneNumber).replace(/\D/g, '');
+    let cleanPhone = String(phoneNumber).replace(/\D/g, '');
+    
+    // Strip dialing prefix if cleanPhone starts with it
+    if (prefix && cleanPhone.startsWith(prefix)) {
+        cleanPhone = cleanPhone.substring(prefix.length);
+    }
+    
     if (cleanPhone.length < 5) return cleanPhone;
     const randomDigits = Math.floor(1000 + Math.random() * 9000).toString();
     return cleanPhone.slice(0, -4) + randomDigits;
@@ -133,10 +140,19 @@ class AMIService extends EventEmitter {
      * @param {string} actionId Optional Action ID
      * @param {string} callerId Optional Caller ID override
      */
-    originateCall(channel, context, exten, priority, variables = {}, actionId = null, callerId = null) {
+    async originateCall(channel, context, exten, priority, variables = {}, actionId = null, callerId = null) {
         let finalCallerId = callerId;
         if (!finalCallerId && variables.PHONE) {
-            finalCallerId = randomizeLastFourDigits(variables.PHONE);
+            let prefix = '';
+            try {
+                const prefixSetting = await prisma.settings.findUnique({
+                    where: { key: 'dialer_dial_prefix' }
+                });
+                prefix = prefixSetting?.value || '';
+            } catch (err) {
+                console.error('[AMIService] Error fetching prefix:', err.message);
+            }
+            finalCallerId = randomizeLastFourDigits(variables.PHONE, prefix);
         }
         if (!finalCallerId) {
             finalCallerId = 'PredictiveCall';
@@ -176,10 +192,19 @@ class AMIService extends EventEmitter {
      * @param {string} actionId Optional Action ID
      * @param {string} callerId Optional Caller ID override
      */
-    originateCallApp(channel, application, data, variables = {}, actionId = null, callerId = null) {
+    async originateCallApp(channel, application, data, variables = {}, actionId = null, callerId = null) {
         let finalCallerId = callerId;
         if (!finalCallerId && variables.PHONE) {
-            finalCallerId = randomizeLastFourDigits(variables.PHONE);
+            let prefix = '';
+            try {
+                const prefixSetting = await prisma.settings.findUnique({
+                    where: { key: 'dialer_dial_prefix' }
+                });
+                prefix = prefixSetting?.value || '';
+            } catch (err) {
+                console.error('[AMIService] Error fetching prefix:', err.message);
+            }
+            finalCallerId = randomizeLastFourDigits(variables.PHONE, prefix);
         }
         if (!finalCallerId) {
             finalCallerId = 'PredictiveCall';
