@@ -441,7 +441,7 @@ export class PredictiveEngine {
                     }
  
                     // 6. Redirect the customer's channel to the agent's room in Asterisk dialplan
-                    amiService.redirectCall(channelName, 'from-internal', roomName, 1);
+                    amiService.redirectCall(channelName, vitalpbxConfig.context, roomName, 1);
 
                     // 7. Save call in call_history as "Atendida"
                     await prisma.call_history.create({
