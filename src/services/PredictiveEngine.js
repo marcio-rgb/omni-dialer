@@ -344,8 +344,9 @@ export class PredictiveEngine {
     setupAmiListeners() {
         amiService.on('UserEvent', async (event) => {
             if (event.UserEvent === 'PredictiveHuman') {
-                const { Channelid, Phone, LeadId, CampaignId } = event;
-                console.log(`[PredictiveEngine] AMI UserEvent PredictiveHuman received. Channel: ${Channelid}, Phone: ${Phone}, Lead: ${LeadId}`);
+                const { Channel, ChannelId, Phone, LeadId, CampaignId } = event;
+                const channelName = Channel || ChannelId || event.Channelid;
+                console.log(`[PredictiveEngine] AMI UserEvent PredictiveHuman received. Channel: ${channelName}, Phone: ${Phone}, Lead: ${LeadId}`);
                 
                 try {
                     // Try to pop an available agent
@@ -354,12 +355,12 @@ export class PredictiveEngine {
                     if (popped && popped.length > 0) {
                         agentId = popped[0];
                     }
-
+ 
                     if (!agentId) {
-                        console.warn(`[PredictiveEngine] No agents available for answered call on channel ${Channelid}. Hanging up.`);
+                        console.warn(`[PredictiveEngine] No agents available for answered call on channel ${channelName}. Hanging up.`);
                         // Hang up the call
-                        amiService.hangupCall(Channelid);
-
+                        amiService.hangupCall(channelName);
+ 
                         // Save call in call_history as "Abandono"
                         const contact = await getOrCreateContact(Phone, LeadId);
                         const systemUser = await getOrCreateSystemUser();
@@ -372,18 +373,18 @@ export class PredictiveEngine {
                                 data_inicio: new Date()
                             }
                         });
-
+ 
                         // Clean up dialing tracking in Redis
                         await redisClient.srem('dialer:active_dialing_channels', LeadId);
                         await redisClient.del(`dialer:dialing_calls:${LeadId}`);
-
+ 
                         // Inflate success rate in Redis temporarily to freeze dialer
                         await redisClient.set('dialer:inflated_success_rate', '1.0', 'EX', 30);
                         return;
                     }
-
+ 
                     // --- CONNECTING CALL TO AGENT ---
-                    console.log(`[PredictiveEngine] Assigning call on channel ${Channelid} to Agent ${agentId}`);
+                    console.log(`[PredictiveEngine] Assigning call on channel ${channelName} to Agent ${agentId}`);
                     
                     // 1. Update agent status in Postgres to ocupado
                     const agent = await prisma.users.update({
@@ -393,13 +394,13 @@ export class PredictiveEngine {
                             agent_status_reason: 'In Call'
                         }
                     });
-
+ 
                     // 2. Get or create Contact
                     const contact = await getOrCreateContact(Phone, LeadId);
-
+ 
                     // 3. Find or create Open Conversation
                     const conversation = await getOrCreateConversation(contact, agentId, Phone);
-
+ 
                     // 4. Create active call record in DB calls table
                     const callId = crypto.randomUUID();
                     const roomName = `sala_agente_${agentId}`;
@@ -412,7 +413,7 @@ export class PredictiveEngine {
                             agent_id: agentId
                         }
                     });
-
+ 
                     // 5. Emit agent.incoming_call event via active WebSocket to pop CRM data
                     const agentSocket = activeSockets.get(agentId);
                     if (agentSocket && agentSocket.readyState === 1 /* OPEN */) {
@@ -428,9 +429,9 @@ export class PredictiveEngine {
                             }
                         }));
                     }
-
+ 
                     // 6. Redirect the customer's channel to the agent's room in Asterisk dialplan
-                    amiService.redirectCall(Channelid, 'from-internal', roomName, 1);
+                    amiService.redirectCall(channelName, 'from-internal', roomName, 1);
 
                     // 7. Save call in call_history as "Atendida"
                     await prisma.call_history.create({
