@@ -250,6 +250,19 @@ class AMIService extends EventEmitter {
     }
 
     /**
+     * Sets a channel variable on an active Asterisk channel.
+     */
+    setVariable(channel, variable, value) {
+        console.log(`[AMI] Action: Setvar -> ${channel} variable ${variable}=${value}`);
+        this.sendAction({
+            Action: 'Setvar',
+            Channel: channel,
+            Variable: variable,
+            Value: value
+        });
+    }
+
+    /**
      * Hangs up an active Asterisk channel.
      */
     hangupCall(channel) {
