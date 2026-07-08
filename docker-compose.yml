@@ -1,16 +1,6 @@
 version: '3.8'
 
 services:
-  dialer_redis:
-    image: redis:alpine
-    container_name: dialer_redis
-    restart: always
-    command: [ "redis-server", "--appendonly", "yes" ]
-    ports:
-      - "6382:6379"
-    networks:
-      - minha_rede
-
   dialer:
     image: ghcr.io/marcio-rgb/omni-dialer:latest
     container_name: omnichat_dialer
@@ -18,9 +8,9 @@ services:
     environment:
       - PORT=3001
       - DATABASE_URL=postgresql://postgres:ojr6DNM25InIg3qoYI4nbUL5Cx04iCiCn1122@${DB_HOST:-postgres}:5432/omnichat_db?schema=public
-      - REDIS_HOST=dialer_redis
+      - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=""
+      - REDIS_PASSWORD=ojr6DNM25InIg3qoYI4nbUL5Cx04iCiC
       - LIVEKIT_URL=http://${LIVEKIT_HOST:-livekit}:7880
       - LIVEKIT_API_KEY=devkey
       - LIVEKIT_API_SECRET=secret
@@ -38,8 +28,6 @@ services:
       - "3001:3001"
     networks:
       - minha_rede
-    depends_on:
-      - dialer_redis
     deploy:
       labels:
         - "traefik.enable=true"
