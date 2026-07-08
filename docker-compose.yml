@@ -17,7 +17,7 @@ services:
     restart: always
     environment:
       - PORT=3001
-      - DATABASE_URL=postgresql://postgres:ojr6DNM25InIg3qoYI4nbUL5Cx04iCiC@${DB_HOST:-postgres}:5432/omnichat_db?schema=public
+      - DATABASE_URL=postgresql://postgres:ojr6DNM25InIg3qoYI4nbUL5Cx04iCiCn1122@${DB_HOST:-postgres}:5432/omnichat_db?schema=public
       - REDIS_HOST=dialer_redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=""
@@ -33,7 +33,7 @@ services:
       - AMI_PORT=5038
       - AMI_USER=Omnichat
       - AMI_SECRET=ypnqYP7EHNtYFkqww23243rwew423
-      - UPDATE_TIMESTAMP=1783485013
+      - UPDATE_TIMESTAMP=1783485703
     ports:
       - "3001:3001"
     networks:
