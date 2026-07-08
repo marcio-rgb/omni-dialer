@@ -19,13 +19,20 @@ model Campaign {
 }
 
 model Disposition {
-  id        Int      @id @default(autoincrement())
-  name      String
-  type      String
-  blockType String?
-  blockDays Int?
-  createdAt DateTime @default(now())
-  updatedAt DateTime
+  id                   Int      @id @default(autoincrement())
+  name                 String
+  type                 String
+  blockType            String?
+  blockDays            Int?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime
+  blacklist            Boolean? @default(false)
+  breakTime            Int?     @default(0)
+  agendamento          Int?     @default(0)
+  business_status      String?
+  is_mute_or_voicemail Boolean? @default(false)
+
+  @@map("disposition")
 }
 
 model Lead {

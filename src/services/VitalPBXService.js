@@ -126,7 +126,8 @@ export class VitalPBXService {
      * @param {string} roomName Name of the LiveKit room
      */
     static async transferCall(channelId, roomName) {
-        const destination = `sip:${roomName}@livekit-sip:5060`;
+        const sipHost = process.env.LIVEKIT_SIP_HOST || 'livekit-sip:5060';
+        const destination = `sip:${roomName}@${sipHost}`;
         console.log(`[VitalPBXService] Transferring channel ${channelId} to ${destination}`);
 
         if (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development') {
