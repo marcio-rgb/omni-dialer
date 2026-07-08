@@ -10,4 +10,4 @@ if ! command -v node &> /dev/null; then
 fi
 
 # Run the node automation script, forwarding any arguments (like custom commit messages)
-node deploy_github_portainer.js "$@"
+node "$(dirname "$0")/deploy_github_portainer.js" "$@"
