@@ -107,7 +107,7 @@ export class PredictiveEngine {
             });
 
             if (totalCalls === 0) {
-                return parseFloat(process.env.DIALER_SUCCESS_RATE_DEFAULT || '0.3');
+                return parseFloat(process.env.DIALER_SUCCESS_RATE_DEFAULT || '0.10');
             }
 
             const answeredCalls = await prisma.call_history.count({
@@ -121,12 +121,12 @@ export class PredictiveEngine {
 
             // Clamp success rate between MIN and MAX
             const minRate = parseFloat(process.env.DIALER_MIN_SUCCESS_RATE || '0.05');
-            const maxRate = parseFloat(process.env.DIALER_MAX_SUCCESS_RATE || '1.0');
+            const maxRate = parseFloat(process.env.DIALER_MAX_SUCCESS_RATE || '0.20');
 
             return Math.max(minRate, Math.min(maxRate, rate));
         } catch (error) {
             console.error('[PredictiveEngine] Error calculating success rate, using default:', error.message);
-            return parseFloat(process.env.DIALER_SUCCESS_RATE_DEFAULT || '0.3');
+            return parseFloat(process.env.DIALER_SUCCESS_RATE_DEFAULT || '0.10');
         }
     }
 
@@ -315,7 +315,6 @@ export class PredictiveEngine {
                     await redisClient.srem('dialer:active_dialing_channels', leadId);
                     continue;
                 }
-
                 const elapsed = now - parseInt(callData.timestamp);
                 if (elapsed > 45000) {
                     console.log(`[PredictiveEngine] Lead ${leadId} timed out (${elapsed}ms). Cleaning up.`);
@@ -328,6 +327,23 @@ export class PredictiveEngine {
                         operator: '',
                         time: '00:00'
                     })).catch(() => {});
+
+                    // Save call in call_history as "NaoAtendida"
+                    try {
+                        const contact = await getOrCreateContact(callData.phone, leadId);
+                        const systemUser = await getOrCreateSystemUser();
+                        await prisma.call_history.create({
+                            data: {
+                                cliente_id: contact.id,
+                                agente_id: systemUser.id,
+                                status: 'NaoAtendida',
+                                duracao: 0,
+                                data_inicio: new Date(parseInt(callData.timestamp))
+                            }
+                        });
+                    } catch (dbErr) {
+                        console.error('[PredictiveEngine] Error saving NaoAtendida call to history:', dbErr.message);
+                    }
 
                     await redisClient.srem('dialer:active_dialing_channels', leadId);
                     await redisClient.del(`dialer:dialing_calls:${leadId}`);
