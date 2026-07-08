@@ -14,6 +14,35 @@ import fastifyCors from '@fastify/cors';
 
 dotenv.config();
 
+// Intercept console messages for real-time supervisor logs
+const originalLog = console.log;
+const originalWarn = console.warn;
+const originalError = console.error;
+
+console.log = (...args) => {
+    originalLog(...args);
+    publishDebugLog('log', args);
+};
+console.warn = (...args) => {
+    originalWarn(...args);
+    publishDebugLog('warn', args);
+};
+console.error = (...args) => {
+    originalError(...args);
+    publishDebugLog('error', args);
+};
+
+function publishDebugLog(level, args) {
+    try {
+        const msg = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ');
+        redisClient.publish('dialer:debug_logs', JSON.stringify({
+            timestamp: new Date().toLocaleTimeString('pt-BR'),
+            level: level,
+            message: msg
+        })).catch(() => {});
+    } catch (err) {}
+}
+
 const fastify = Fastify({ 
     logger: {
         level: 'info'
