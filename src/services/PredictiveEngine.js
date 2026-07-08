@@ -404,6 +404,16 @@ export class PredictiveEngine {
                     // 4. Create active call record in DB calls table
                     const callId = crypto.randomUUID();
                     const roomName = `sala_agente_${agentId}`;
+                    
+                    // Clean up any old call with the same room_name to prevent unique constraint violation
+                    try {
+                        await prisma.calls.deleteMany({
+                            where: { room_name: roomName }
+                        });
+                    } catch (delErr) {
+                        console.error(`[PredictiveEngine] Error deleting old call for room ${roomName}:`, delErr.message);
+                    }
+
                     await prisma.calls.create({
                         data: {
                             id: callId,
