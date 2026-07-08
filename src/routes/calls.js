@@ -468,17 +468,19 @@ export default async function callRoutes(fastify, opts) {
      * Webhook triggered by VitalPBX when a customer answers the phone.
      */
     fastify.post('/webhooks/livekit', async (request, reply) => {
-        const { event, channelId, phone, leadId, campaignId } = request.body || {};
+        const { event, channelId, phone: phoneRaw, leadId, campaignId } = request.body || {};
 
         // Filter events - only interested in answered calls
         if (event !== 'call.answered') {
             return { message: 'Event ignored' };
         }
 
-        if (!channelId || !phone) {
+        if (!channelId || !phoneRaw) {
             reply.code(400);
             return { error: 'channelId and phone are required for answered calls' };
         }
+
+        const phone = await cleanPhonePrefix(phoneRaw);
 
         console.log(`[Webhook] Call answered - Channel: ${channelId}, Phone: ${phone}, Lead: ${leadId}`);
 
@@ -641,7 +643,28 @@ export default async function callRoutes(fastify, opts) {
 
 // --- DATABASE HELPERS ---
 
-export async function getOrCreateContact(phone, leadId) {
+export async function cleanPhonePrefix(phone) {
+    if (!phone) return '';
+    let clean = String(phone).replace(/\D/g, '');
+    
+    try {
+        const prefixSetting = await prisma.settings.findUnique({
+            where: { key: 'dialer_dial_prefix' }
+        });
+        const prefix = prefixSetting?.value || '';
+        
+        if (prefix && clean.startsWith(prefix)) {
+            clean = clean.substring(prefix.length);
+        }
+    } catch (err) {
+        console.error('[cleanPhonePrefix] Error fetching dialer prefix:', err.message);
+    }
+    
+    return clean;
+}
+
+export async function getOrCreateContact(phoneRaw, leadId) {
+    const phone = await cleanPhonePrefix(phoneRaw);
     let contact = null;
     let lead = null;
 
@@ -748,7 +771,8 @@ export async function getOrCreateSystemUser() {
     return systemUser;
 }
 
-export async function getOrCreateConversation(contact, agentId, phone) {
+export async function getOrCreateConversation(contact, agentId, phoneRaw) {
+    const phone = await cleanPhonePrefix(phoneRaw);
     // Find open conversation for the contact
     let conversation = await prisma.conversations.findFirst({
         where: {

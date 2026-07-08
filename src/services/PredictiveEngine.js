@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import prisma from '../config/db.js';
 import redisClient from '../config/redis.js';
-import { activeSockets, getOrCreateContact, getOrCreateSystemUser, getOrCreateConversation } from '../routes/calls.js';
+import { activeSockets, getOrCreateContact, getOrCreateSystemUser, getOrCreateConversation, cleanPhonePrefix } from '../routes/calls.js';
 import { amiService } from './AMIService.js';
 import vitalpbxConfig from '../config/vitalpbx.js';
 
@@ -346,7 +346,8 @@ export class PredictiveEngine {
             if (event.UserEvent === 'PredictiveHuman') {
                 const { Channel, ChannelId, Phone, LeadId, CampaignId } = event;
                 const channelName = Channel || ChannelId || event.Channelid;
-                console.log(`[PredictiveEngine] AMI UserEvent PredictiveHuman received. Channel: ${channelName}, Phone: ${Phone}, Lead: ${LeadId}`);
+                const cleanPhone = await cleanPhonePrefix(Phone);
+                console.log(`[PredictiveEngine] AMI UserEvent PredictiveHuman received. Channel: ${channelName}, Phone: ${cleanPhone}, Lead: ${LeadId}`);
                 
                 try {
                     // Try to pop an available agent
@@ -362,7 +363,7 @@ export class PredictiveEngine {
                         amiService.hangupCall(channelName);
  
                         // Save call in call_history as "Abandono"
-                        const contact = await getOrCreateContact(Phone, LeadId);
+                        const contact = await getOrCreateContact(cleanPhone, LeadId);
                         const systemUser = await getOrCreateSystemUser();
                         await prisma.call_history.create({
                             data: {
@@ -396,10 +397,10 @@ export class PredictiveEngine {
                     });
  
                     // 2. Get or create Contact
-                    const contact = await getOrCreateContact(Phone, LeadId);
+                    const contact = await getOrCreateContact(cleanPhone, LeadId);
  
                     // 3. Find or create Open Conversation
-                    const conversation = await getOrCreateConversation(contact, agentId, Phone);
+                    const conversation = await getOrCreateConversation(contact, agentId, cleanPhone);
  
                     // 4. Create active call record in DB calls table
                     const callId = crypto.randomUUID();
@@ -435,7 +436,7 @@ export class PredictiveEngine {
                                 room_name: roomName,
                                 cpf: contact.cpf || null,
                                 name: contact.name,
-                                phone: Phone
+                                phone: cleanPhone
                             }
                         }));
                     }
