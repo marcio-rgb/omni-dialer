@@ -14,6 +14,8 @@ export class PredictiveEngine {
         
         // Listen to AMI events
         this.setupAmiListeners();
+
+        this.lastSummaryLog = 0;
     }
 
     /**
@@ -51,10 +53,6 @@ export class PredictiveEngine {
         try {
             // 1. Get Available Agents count from Redis ZSET
             const availableAgents = await redisClient.zcard('dialer:idle_agents');
-            if (availableAgents === 0) {
-                // If no agents are available, do not dial
-                return;
-            }
 
             // 2. Calculate Success Rate (answered vs total in last X minutes)
             let successRate = await this.calculateSuccessRate();
@@ -66,6 +64,17 @@ export class PredictiveEngine {
             // Disparos = (Agentes Livres / Taxa de Sucesso) - Chamadas em Curso
             const targetCalls = availableAgents / successRate;
             const disparos = Math.floor(targetCalls - callsInProgress);
+
+            const now = Date.now();
+            if (now - this.lastSummaryLog > 10000) {
+                console.log(`[PredictiveEngine] Loop Status - Available Agents: ${availableAgents}, Success Rate: ${(successRate * 100).toFixed(1)}%, Active Dialing: ${callsInProgress}, Target: ${targetCalls.toFixed(2)}, Calculated Disparos: ${disparos}`);
+                this.lastSummaryLog = now;
+            }
+
+            if (availableAgents === 0) {
+                // If no agents are available, do not dial
+                return;
+            }
 
             if (disparos > 0) {
                 console.log(`[PredictiveEngine] Tick - Agents: ${availableAgents}, Success Rate: ${(successRate * 100).toFixed(1)}%, Active Dialing: ${callsInProgress}. Triggering ${disparos} disparos.`);
@@ -238,6 +247,8 @@ export class PredictiveEngine {
             const dialedLeads = await redisClient.smembers('dialer:dialed_leads');
             const dialedLeadIds = dialedLeads.map(id => parseInt(id)).filter(id => !isNaN(id));
 
+            console.log(`[PredictiveEngine] Refill Info - Active Campaigns: ${JSON.stringify(activeCampaignIds)}, Dialed Leads Count in Redis: ${dialedLeadIds.length}`);
+
             // Fetch undialed leads from Postgres
             const leads = await prisma.lead.findMany({
                 where: {
@@ -249,7 +260,7 @@ export class PredictiveEngine {
             });
 
             if (leads.length === 0) {
-                console.log('[PredictiveEngine] No new undialed leads in Postgres.');
+                console.log(`[PredictiveEngine] No new undialed leads found in Postgres for campaigns ${JSON.stringify(activeCampaignIds)}.`);
                 return;
             }
 
