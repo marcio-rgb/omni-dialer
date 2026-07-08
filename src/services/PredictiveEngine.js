@@ -440,6 +440,13 @@ export class PredictiveEngine {
                             agent_id: agentId
                         }
                     });
+
+                    // Store the predictive call mapping to agentId and active channel
+                    const uniqueId = event.Uniqueid;
+                    if (uniqueId) {
+                        await redisClient.set(`dialer:predictive_call_agent:${uniqueId}`, agentId, 'EX', 7200);
+                    }
+                    await redisClient.set(`dialer:active_call_channel:${agentId}`, channelName, 'EX', 7200);
  
                     // 5. Emit agent.incoming_call event via active WebSocket to pop CRM data
                     const agentSocket = activeSockets.get(agentId);

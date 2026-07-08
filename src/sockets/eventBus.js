@@ -57,12 +57,8 @@ export function initEventBus(io) {
 
                 // 2. Manage in Redis ZSET
                 if (status === 'disponivel') {
-                    // Add agent to ZSET with current timestamp as score (FIFO/longest idle first)
-                    await redisClient.zAdd('dialer:idle_agents', {
-                        score: Date.now(),
-                        value: agentId
-                    });
-                    console.log(`[EventBus] Agent ${agentId} added to idle queue ZSET.`);
+                    // Defer adding to idle queue until WebRTC/LiveKit connected
+                    console.log(`[EventBus] Agent ${agentId} status updated to disponivel. Waiting for LiveKit...`);
                 } else {
                     // Remove from ZSET if they pause or become busy
                     await redisClient.zRem('dialer:idle_agents', agentId);
@@ -75,6 +71,22 @@ export function initEventBus(io) {
             } catch (err) {
                 console.error(`[EventBus] Error changing status for agent ${agentId}:`, err.message);
                 socket.emit('agent.error', { message: 'Failed to update status' });
+            }
+        });
+
+        socket.on('agent.ready_for_calls', async () => {
+            console.log(`[EventBus] Agent ${agentId} is ready for calls (LiveKit connected).`);
+            try {
+                const agent = await prisma.users.findUnique({ where: { id: agentId } });
+                if (agent && agent.agent_status === 'disponivel') {
+                    await redisClient.zAdd('dialer:idle_agents', {
+                        score: Date.now(),
+                        value: agentId
+                    });
+                    console.log(`[EventBus] Agent ${agentId} added to idle queue ZSET.`);
+                }
+            } catch (err) {
+                console.error(`[EventBus] Error handling agent.ready_for_calls:`, err.message);
             }
         });
 

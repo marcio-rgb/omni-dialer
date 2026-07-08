@@ -107,6 +107,9 @@ export default async function callRoutes(fastify, opts) {
                     console.log(`[AMI] Mapping manual call Uniqueid ${uniqueId} to Agent ${agentId}`);
                     try {
                         await redisClient.set(`dialer:manual_call_agent:${uniqueId}`, agentId, 'EX', 7200);
+                        if (event.Channel) {
+                            await redisClient.set(`dialer:active_call_channel:${agentId}`, event.Channel, 'EX', 7200);
+                        }
                         
                         // Link Uniqueid to manual call details (roomName, phone)
                         const infoStr = await redisClient.get(`dialer:manual_call_info:${agentId}`);
@@ -168,6 +171,7 @@ export default async function callRoutes(fastify, opts) {
                 
                 // Remove the mapping
                 await redisClient.del(`dialer:manual_call_agent:${uniqueId}`);
+                await redisClient.del(`dialer:active_call_channel:${agentId}`);
 
                 // 1. Reset agent status to "disponivel" in DB
                 await prisma.users.update({
@@ -178,13 +182,82 @@ export default async function callRoutes(fastify, opts) {
                     }
                 });
 
-                // 2. Translate cause code to user-friendly message
+                // 2. Mark active call in calls table as completed
+                try {
+                    await prisma.calls.updateMany({
+                        where: {
+                            agent_id: agentId,
+                            status: 'active'
+                        },
+                        data: {
+                            status: 'completed',
+                            ended_at: new Date()
+                        }
+                    });
+                } catch (dbErr) {
+                    console.error('[AMI] Error updating calls table on manual hangup:', dbErr.message);
+                }
+
+                // 3. Translate cause code to user-friendly message
                 const causeCode = event.Cause || '16';
                 const causeText = event['Cause-txt'] || '';
                 const message = getHangupCauseMessage(causeCode, causeText);
 
-                // 3. Notify the agent via WebSocket
+                // 4. Notify the agent via WebSocket
                 const socket = activeSockets.get(agentId);
+                if (socket && socket.readyState === 1) {
+                    socket.send(JSON.stringify({
+                        event: 'agent.call_ended',
+                        data: {
+                            message: message,
+                            causeCode: String(causeCode),
+                            causeText: causeText
+                        }
+                    }));
+                }
+            }
+
+            // Check if this Uniqueid is mapped to a predictive call agent
+            const predictiveAgentId = await redisClient.get(`dialer:predictive_call_agent:${uniqueId}`);
+            if (predictiveAgentId) {
+                console.log(`[AMI] Hangup received for predictive call channel ${event.Channel} (Uniqueid: ${uniqueId}) associated with Agent ${predictiveAgentId}. Cause: ${event.Cause} (${event['Cause-txt']})`);
+
+                // Remove the mapping
+                await redisClient.del(`dialer:predictive_call_agent:${uniqueId}`);
+                await redisClient.del(`dialer:active_call_channel:${predictiveAgentId}`);
+
+                // 1. Reset agent status to "disponivel" in DB
+                await prisma.users.update({
+                    where: { id: predictiveAgentId },
+                    data: {
+                        agent_status: 'disponivel',
+                        agent_status_reason: 'Predictive Call Ended'
+                    }
+                });
+
+                // 2. Mark active call in calls table as completed
+                try {
+                    await prisma.calls.updateMany({
+                        where: {
+                            agent_id: predictiveAgentId,
+                            status: 'active'
+                        },
+                        data: {
+                            status: 'completed',
+                            ended_at: new Date()
+                        }
+                    });
+                } catch (dbErr) {
+                    console.error('[AMI] Error updating calls table on predictive hangup:', dbErr.message);
+                }
+
+                // 3. Translate cause code to user-friendly message
+                const causeCode = event.Cause || '16';
+                const causeText = event['Cause-txt'] || '';
+                const message = getHangupCauseMessage(causeCode, causeText);
+
+                // 4. Notify the agent via WebSocket
+                const socket = activeSockets.get(predictiveAgentId);
                 if (socket && socket.readyState === 1) {
                     socket.send(JSON.stringify({
                         event: 'agent.call_ended',
@@ -269,8 +342,8 @@ export default async function callRoutes(fastify, opts) {
                             const agentName = agent?.name || `Agente ${agentId}`;
                             token = await LiveKitService.generateToken(roomName, agentName, true);
                             
-                            await redisClient.zadd('dialer:idle_agents', Date.now(), agentId);
-                            console.log(`[WebSocket] Agent ${agentId} added to idle queue ZSET. Room: ${roomName}`);
+                            // Defer adding to idle_agents queue until WebRTC/LiveKit is fully connected
+                            console.log(`[WebSocket] Agent ${agentId} status updated to disponivel. Waiting for LiveKit connection...`);
                         } catch (lkErr) {
                             console.error(`[WebSocket] LiveKit error for agent ${agentId}:`, lkErr.message);
                             // Fallback status to pause if LiveKit fails
@@ -301,6 +374,25 @@ export default async function callRoutes(fastify, opts) {
                             room_name: status === 'disponivel' ? roomName : null
                         }
                     }));
+                } else if (event === 'agent.ready_for_calls') {
+                    console.log(`[WebSocket] Agent ${agentId} is ready for calls (LiveKit connected).`);
+                    const agent = await prisma.users.findUnique({ where: { id: agentId } });
+                    if (agent && agent.agent_status === 'disponivel') {
+                        await redisClient.zadd('dialer:idle_agents', Date.now(), agentId);
+                        console.log(`[WebSocket] Agent ${agentId} added to idle queue ZSET via agent.ready_for_calls.`);
+                    } else {
+                        console.warn(`[WebSocket] Agent ${agentId} sent ready but status is ${agent?.agent_status}`);
+                    }
+                } else if (event === 'agent.hangup_call') {
+                    console.log(`[WebSocket] Hangup call request from Agent ${agentId}`);
+                    const channelName = await redisClient.get(`dialer:active_call_channel:${agentId}`);
+                    if (channelName) {
+                        console.log(`[WebSocket] Hanging up channel ${channelName} for Agent ${agentId}`);
+                        amiService.hangupCall(channelName);
+                        await redisClient.del(`dialer:active_call_channel:${agentId}`);
+                    } else {
+                        console.warn(`[WebSocket] No active channel found for Agent ${agentId} to hangup`);
+                    }
                 }
             } catch (err) {
                 console.error(`[WebSocket] Error processing agent message:`, err.message);
