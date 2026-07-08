@@ -23,7 +23,7 @@ services:
       - AMI_PORT=5038
       - AMI_USER=Omnichat
       - AMI_SECRET=ypnqYP7EHNtYFkqww23243rwew423
-      - UPDATE_TIMESTAMP=1783508356
+      - UPDATE_TIMESTAMP=1783511607
     ports:
       - "3001:3001"
     networks:
