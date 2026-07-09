@@ -61,6 +61,17 @@ export class PredictiveEngine {
             // 2. Calculate Success Rate (answered vs total in last X minutes)
             let successRate = await this.calculateSuccessRate();
 
+            // Fetch dialer aggressiveness multiplier from settings DB
+            let aggressiveness = 1.0;
+            try {
+                const aggSetting = await prisma.settings.findUnique({ where: { key: 'dialer_aggressiveness' } });
+                if (aggSetting && aggSetting.value) {
+                    aggressiveness = parseFloat(aggSetting.value) || 1.0;
+                }
+            } catch (err) {
+                console.error('[PredictiveEngine] Error fetching dialer_aggressiveness from DB:', err.message);
+            }
+
             // 3. Clean up expired recent dials (older than 60 seconds) in Redis ZSET
             await redisClient.zremrangebyscore('dialer:recent_dials', '-inf', String(oneMinuteAgo));
 
@@ -68,7 +79,7 @@ export class PredictiveEngine {
             const recentDialsCount = await redisClient.zcount('dialer:recent_dials', String(oneMinuteAgo), String(now)) || 0;
 
             // 5. Calculate Target Dials to achieve 1 answered call per minute per idle agent
-            const targetCalls = Math.ceil(availableAgents / successRate);
+            const targetCalls = Math.ceil((availableAgents / successRate) * aggressiveness);
             const dialsNeeded = Math.max(0, targetCalls - recentDialsCount);
 
             // 6. Calculate Pacing (Max Disparos per tick to smoothly space calls)
@@ -138,7 +149,33 @@ export class PredictiveEngine {
         }
 
         try {
-            const windowMinutes = parseInt(process.env.DIALER_SUCCESS_RATE_WINDOW_MINUTES || '5');
+            // Load settings from DB with fallback to env variables
+            let windowMinutes = parseInt(process.env.DIALER_SUCCESS_RATE_WINDOW_MINUTES || '5');
+            let minRate = parseFloat(process.env.DIALER_MIN_SUCCESS_RATE || '0.05');
+            let maxRate = parseFloat(process.env.DIALER_MAX_SUCCESS_RATE || '0.20');
+
+            try {
+                const dbSettings = await prisma.settings.findMany({
+                    where: {
+                        key: {
+                            in: ['dialer_success_rate_window_minutes', 'dialer_min_success_rate', 'dialer_max_success_rate']
+                        }
+                    }
+                });
+
+                for (const s of dbSettings) {
+                    if (s.key === 'dialer_success_rate_window_minutes' && s.value) {
+                        windowMinutes = parseInt(s.value);
+                    } else if (s.key === 'dialer_min_success_rate' && s.value) {
+                        minRate = parseFloat(s.value);
+                    } else if (s.key === 'dialer_max_success_rate' && s.value) {
+                        maxRate = parseFloat(s.value);
+                    }
+                }
+            } catch (dbErr) {
+                console.error('[PredictiveEngine] Error loading success rate parameters from DB:', dbErr.message);
+            }
+
             const cutoffDate = new Date(Date.now() - windowMinutes * 60 * 1000);
 
             // Query Postgres call_history for recent calls
@@ -160,10 +197,6 @@ export class PredictiveEngine {
             });
 
             const rate = answeredCalls / totalCalls;
-
-            // Clamp success rate between MIN and MAX
-            const minRate = parseFloat(process.env.DIALER_MIN_SUCCESS_RATE || '0.05');
-            const maxRate = parseFloat(process.env.DIALER_MAX_SUCCESS_RATE || '0.20');
 
             return Math.max(minRate, Math.min(maxRate, rate));
         } catch (error) {
