@@ -321,6 +321,20 @@ export default async function callRoutes(fastify, opts) {
 
                     console.log(`[WebSocket] Agent ${agentId} status change request: ${status}`);
 
+                    // Check and hang up any active call channel if changing to inactive status
+                    if (['pausa', 'offline', 'negociacao'].includes(status)) {
+                        try {
+                            const channelName = await redisClient.get(`dialer:active_call_channel:${agentId}`);
+                            if (channelName) {
+                                console.log(`[WebSocket] Agent ${agentId} status changed to ${status} with active call. Hanging up channel ${channelName}...`);
+                                amiService.hangupCall(channelName);
+                                await redisClient.del(`dialer:active_call_channel:${agentId}`);
+                            }
+                        } catch (err) {
+                            console.error(`[WebSocket] Error hanging up call on status change for agent ${agentId}:`, err.message);
+                        }
+                    }
+
                     // 1. Update in Postgres
                     const agent = await prisma.users.update({
                         where: { id: agentId },
@@ -408,6 +422,18 @@ export default async function callRoutes(fastify, opts) {
         socket.on('close', async () => {
             console.log(`[WebSocket] Agent disconnected: ${agentId}`);
             activeSockets.delete(agentId);
+
+            try {
+                // Check and hang up any active call channel to avoid stuck calls
+                const channelName = await redisClient.get(`dialer:active_call_channel:${agentId}`);
+                if (channelName) {
+                    console.log(`[WebSocket] Agent ${agentId} disconnected with active call. Hanging up channel ${channelName}`);
+                    amiService.hangupCall(channelName);
+                    await redisClient.del(`dialer:active_call_channel:${agentId}`);
+                }
+            } catch (hangupErr) {
+                console.error(`[WebSocket] Error hanging up active channel on disconnect for ${agentId}:`, hangupErr.message);
+            }
 
             try {
                 // Update agent to pause in Postgres to remove from predictive calculations
