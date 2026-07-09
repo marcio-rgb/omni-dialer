@@ -140,7 +140,7 @@ class AMIService extends EventEmitter {
      * @param {string} actionId Optional Action ID
      * @param {string} callerId Optional Caller ID override
      */
-    async originateCall(channel, context, exten, priority, variables = {}, actionId = null, callerId = null) {
+    async originateCall(channel, context, exten, priority, variables = {}, actionId = null, callerId = null, timeout = '45000') {
         let finalCallerId = callerId;
         if (!finalCallerId && variables.PHONE) {
             let prefix = '';
@@ -165,6 +165,7 @@ class AMIService extends EventEmitter {
             Exten: exten,
             Priority: String(priority),
             Async: 'true',
+            Timeout: String(timeout),
             CallerID: finalCallerId
         };
 
@@ -179,7 +180,7 @@ class AMIService extends EventEmitter {
             action.Variable = varStr;
         }
 
-        console.log(`[AMI] Action: Originate -> ${channel} routing to ${exten}@${context} (CallerID: ${finalCallerId})`);
+        console.log(`[AMI] Action: Originate -> ${channel} routing to ${exten}@${context} (CallerID: ${finalCallerId}) (Timeout: ${timeout}ms)`);
         this.sendAction(action);
     }
 
@@ -191,8 +192,9 @@ class AMIService extends EventEmitter {
      * @param {object} variables Custom Asterisk variables
      * @param {string} actionId Optional Action ID
      * @param {string} callerId Optional Caller ID override
+     * @param {string} timeout Timeout in milliseconds (default 45000)
      */
-    async originateCallApp(channel, application, data, variables = {}, actionId = null, callerId = null) {
+    async originateCallApp(channel, application, data, variables = {}, actionId = null, callerId = null, timeout = '45000') {
         let finalCallerId = callerId;
         if (!finalCallerId && variables.PHONE) {
             let prefix = '';
@@ -216,6 +218,7 @@ class AMIService extends EventEmitter {
             Application: application,
             Data: data,
             Async: 'true',
+            Timeout: String(timeout),
             CallerID: finalCallerId
         };
 
@@ -230,7 +233,7 @@ class AMIService extends EventEmitter {
             action.Variable = varStr;
         }
 
-        console.log(`[AMI] Action: Originate -> ${channel} invoking ${application}(${data}) (CallerID: ${finalCallerId})`);
+        console.log(`[AMI] Action: Originate -> ${channel} invoking ${application}(${data}) (CallerID: ${finalCallerId}) (Timeout: ${timeout}ms)`);
         this.sendAction(action);
     }
 
