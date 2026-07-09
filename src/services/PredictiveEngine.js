@@ -52,41 +52,50 @@ export class PredictiveEngine {
      */
     async tick() {
         try {
+            const now = Date.now();
+            const oneMinuteAgo = now - 60000;
+
             // 1. Get Available Agents count from Redis ZSET
             const availableAgents = await redisClient.zcard('dialer:idle_agents');
 
             // 2. Calculate Success Rate (answered vs total in last X minutes)
             let successRate = await this.calculateSuccessRate();
 
-            // 3. Get Calls in Progress (dialing calls in Redis)
-            const callsInProgress = await redisClient.scard('dialer:active_dialing_channels');
+            // 3. Clean up expired recent dials (older than 60 seconds) in Redis ZSET
+            await redisClient.zremrangebyscore('dialer:recent_dials', '-inf', String(oneMinuteAgo));
 
-            // 4. Calculate Disparos (Overdialing Formula)
-            // Disparos = (Agentes Livres / Taxa de Sucesso) - Chamadas em Curso
-            const targetCalls = availableAgents / successRate;
-            const disparos = Math.floor(targetCalls - callsInProgress);
+            // 4. Get Calls placed in the last 60 seconds
+            const recentDialsCount = await redisClient.zcount('dialer:recent_dials', String(oneMinuteAgo), String(now)) || 0;
 
-            const now = Date.now();
+            // 5. Calculate Target Dials to achieve 1 answered call per minute per idle agent
+            const targetCalls = Math.ceil(availableAgents / successRate);
+            const dialsNeeded = Math.max(0, targetCalls - recentDialsCount);
+
+            // 6. Calculate Pacing (Max Disparos per tick to smoothly space calls)
+            const ticksInWindow = 60000 / this.intervalMs;
+            const maxDialsPerTick = Math.max(1, Math.ceil(targetCalls / ticksInWindow));
+
+            // 7. Determine final disparos for this tick
+            const disparos = Math.min(dialsNeeded, maxDialsPerTick);
+
             if (now - this.lastSummaryLog > 10000) {
-                console.log(`[PredictiveEngine] Loop Status - Available Agents: ${availableAgents}, Success Rate: ${(successRate * 100).toFixed(1)}%, Active Dialing: ${callsInProgress}, Target: ${targetCalls.toFixed(2)}, Calculated Disparos: ${disparos}`);
+                console.log(`[PredictiveEngine] Pacing Loop - Agents: ${availableAgents}, Success Rate: ${(successRate * 100).toFixed(1)}%, Dials Last Min: ${recentDialsCount}/${targetCalls}, Needed: ${dialsNeeded}, Max/Tick: ${maxDialsPerTick}, Disparos: ${disparos}`);
                 this.lastSummaryLog = now;
             }
 
+            // 8. Publish real-time metrics consolidations (throttled to 1s)
+            if (now - this.lastMetricsPublish >= 1000) {
+                this.lastMetricsPublish = now;
+                await this.publishRealtimeMetrics();
+            }
+
             if (availableAgents === 0) {
-                // If no agents are available, do not dial
                 return;
             }
 
             if (disparos > 0) {
-                console.log(`[PredictiveEngine] Tick - Agents: ${availableAgents}, Success Rate: ${(successRate * 100).toFixed(1)}%, Active Dialing: ${callsInProgress}. Triggering ${disparos} disparos.`);
+                console.log(`[PredictiveEngine] Tick - Triggering ${disparos} paced disparos (Target: ${targetCalls}, Recent: ${recentDialsCount}).`);
                 await this.triggerDialing(disparos);
-            }
-
-            // 5. Publish real-time metrics consolidations (throttled to 1s)
-            const nowMs = Date.now();
-            if (nowMs - this.lastMetricsPublish >= 1000) {
-                this.lastMetricsPublish = nowMs;
-                await this.publishRealtimeMetrics();
             }
         } catch (error) {
             console.error('[PredictiveEngine] Error in tick:', error);
@@ -242,6 +251,10 @@ export class PredictiveEngine {
                 const totalKey = `dialer:stats:${todayStr}:total`;
                 await redisClient.incr(totalKey);
                 await redisClient.expire(totalKey, 86400);
+
+                // Track recent dials in sliding window (ZSET)
+                const dialId = `${lead.id}_${Date.now()}_${Math.random()}`;
+                await redisClient.zadd('dialer:recent_dials', String(Date.now()), dialId);
 
                 // Publish real-time dialing event to Redis PubSub (throttled when overdialing rate is very high)
                 this.dialCount = (this.dialCount || 0) + 1;
