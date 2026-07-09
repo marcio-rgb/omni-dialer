@@ -16,6 +16,7 @@ export class PredictiveEngine {
         this.setupAmiListeners();
 
         this.lastSummaryLog = 0;
+        this.lastMetricsPublish = 0;
     }
 
     /**
@@ -80,8 +81,40 @@ export class PredictiveEngine {
                 console.log(`[PredictiveEngine] Tick - Agents: ${availableAgents}, Success Rate: ${(successRate * 100).toFixed(1)}%, Active Dialing: ${callsInProgress}. Triggering ${disparos} disparos.`);
                 await this.triggerDialing(disparos);
             }
+
+            // 5. Publish real-time metrics consolidations (throttled to 1s)
+            const nowMs = Date.now();
+            if (nowMs - this.lastMetricsPublish >= 1000) {
+                this.lastMetricsPublish = nowMs;
+                await this.publishRealtimeMetrics();
+            }
         } catch (error) {
             console.error('[PredictiveEngine] Error in tick:', error);
+        }
+    }
+
+    /**
+     * Publishes current daily consolidated metrics to Redis Pub/Sub.
+     */
+    async publishRealtimeMetrics() {
+        try {
+            const todayStr = new Date().toISOString().split('T')[0];
+            const activeLines = await redisClient.scard('dialer:active_dialing_channels') || 0;
+            
+            const total = parseInt(await redisClient.get(`dialer:stats:${todayStr}:total`) || '0', 10);
+            const answered = parseInt(await redisClient.get(`dialer:stats:${todayStr}:answered`) || '0', 10);
+            const abandoned = parseInt(await redisClient.get(`dialer:stats:${todayStr}:abandoned`) || '0', 10);
+            const productive = parseInt(await redisClient.get(`dialer:stats:${todayStr}:productive`) || '0', 10);
+
+            await redisClient.publish('dialer:metrics_update', JSON.stringify({
+                activeLines,
+                total,
+                answered,
+                abandoned,
+                productive
+            }));
+        } catch (err) {
+            console.error('[PredictiveEngine] Error publishing real-time metrics:', err.message);
         }
     }
 
@@ -203,6 +236,12 @@ export class PredictiveEngine {
 
                 // Track active dialing channels
                 await redisClient.sadd('dialer:active_dialing_channels', String(lead.id));
+
+                // Increment daily total calls counter in Redis
+                const todayStr = new Date().toISOString().split('T')[0];
+                const totalKey = `dialer:stats:${todayStr}:total`;
+                await redisClient.incr(totalKey);
+                await redisClient.expire(totalKey, 86400);
 
                 // Publish real-time dialing event to Redis PubSub (throttled when overdialing rate is very high)
                 this.dialCount = (this.dialCount || 0) + 1;
@@ -390,6 +429,12 @@ export class PredictiveEngine {
                                 data_inicio: new Date()
                             }
                         });
+
+                        // Increment daily abandoned calls counter in Redis
+                        const todayStr = new Date().toISOString().split('T')[0];
+                        const abKey = `dialer:stats:${todayStr}:abandoned`;
+                        await redisClient.incr(abKey);
+                        await redisClient.expire(abKey, 86400);
  
                         // Clean up dialing tracking in Redis
                         await redisClient.srem('dialer:active_dialing_channels', LeadId);
@@ -478,6 +523,12 @@ export class PredictiveEngine {
                             data_inicio: new Date()
                         }
                     });
+
+                    // Increment daily answered calls counter in Redis
+                    const todayStr = new Date().toISOString().split('T')[0];
+                    const ansKey = `dialer:stats:${todayStr}:answered`;
+                    await redisClient.incr(ansKey);
+                    await redisClient.expire(ansKey, 86400);
 
                     // 8. Publish real-time answered call event to Redis PubSub
                     await redisClient.publish('dialer:events', JSON.stringify({

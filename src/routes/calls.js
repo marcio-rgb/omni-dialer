@@ -512,6 +512,12 @@ export default async function callRoutes(fastify, opts) {
             const dialedPhone = await getDialedPhoneWithPrefix(phone);
             console.log(`[ManualWebRTC] Triggering manual WebRTC call via AMI to ${dialedPhone} for Room ${roomName} (Agent: ${agentId})`);
 
+            // Increment daily total calls counter in Redis
+            const todayStr = new Date().toISOString().split('T')[0];
+            const totalKey = `dialer:stats:${todayStr}:total`;
+            await redisClient.incr(totalKey);
+            await redisClient.expire(totalKey, 86400);
+
             // Save roomName and phone to Redis keyed by agentId for mapping in OriginateResponse
             await redisClient.set(`dialer:manual_call_info:${agentId}`, JSON.stringify({
                 roomName,
@@ -584,6 +590,12 @@ export default async function callRoutes(fastify, opts) {
                 // Immediately transfer to LiveKit room
                 await VitalPBXService.transferCall(channelId, manualRoom);
 
+                // Increment daily answered calls counter in Redis
+                const todayStr = new Date().toISOString().split('T')[0];
+                const ansKey = `dialer:stats:${todayStr}:answered`;
+                await redisClient.incr(ansKey);
+                await redisClient.expire(ansKey, 86400);
+
                 // Clean up tracking in Redis
                 await redisClient.srem('dialer:active_dialing_channels', channelId);
                 await redisClient.del(`dialer:dialing_calls:${channelId}`);
@@ -623,6 +635,12 @@ export default async function callRoutes(fastify, opts) {
                         data_inicio: new Date()
                     }
                 });
+
+                // Increment daily abandoned calls counter in Redis
+                const todayStr = new Date().toISOString().split('T')[0];
+                const abKey = `dialer:stats:${todayStr}:abandoned`;
+                await redisClient.incr(abKey);
+                await redisClient.expire(abKey, 86400);
 
                 // 5. Clean up dialing tracking in Redis
                 await redisClient.srem('dialer:active_dialing_channels', channelId);
