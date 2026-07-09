@@ -61,15 +61,26 @@ export class PredictiveEngine {
             // 2. Calculate Success Rate (answered vs total in last X minutes)
             let successRate = await this.calculateSuccessRate();
 
-            // Fetch dialer aggressiveness multiplier from settings DB
+            // Fetch dialer aggressiveness and max channels from settings DB
             let aggressiveness = 1.0;
+            let maxChannels = 60;
             try {
-                const aggSetting = await prisma.settings.findUnique({ where: { key: 'dialer_aggressiveness' } });
-                if (aggSetting && aggSetting.value) {
-                    aggressiveness = parseFloat(aggSetting.value) || 1.0;
+                const dbSettings = await prisma.settings.findMany({
+                    where: {
+                        key: {
+                            in: ['dialer_aggressiveness', 'dialer_max_channels']
+                        }
+                    }
+                });
+                for (const s of dbSettings) {
+                    if (s.key === 'dialer_aggressiveness' && s.value) {
+                        aggressiveness = parseFloat(s.value) || 1.0;
+                    } else if (s.key === 'dialer_max_channels' && s.value) {
+                        maxChannels = parseInt(s.value) || 60;
+                    }
                 }
             } catch (err) {
-                console.error('[PredictiveEngine] Error fetching dialer_aggressiveness from DB:', err.message);
+                console.error('[PredictiveEngine] Error fetching dialer settings from DB:', err.message);
             }
 
             // 3. Clean up expired recent dials (older than 60 seconds) in Redis ZSET
@@ -86,11 +97,13 @@ export class PredictiveEngine {
             const ticksInWindow = 60000 / this.intervalMs;
             const maxDialsPerTick = Math.max(1, Math.ceil(targetCalls / ticksInWindow));
 
-            // 7. Determine final disparos for this tick
-            const disparos = Math.min(dialsNeeded, maxDialsPerTick);
+            // 7. Get current active concurrent lines and cap disparos by available capacity
+            const activeLines = await redisClient.scard('dialer:active_dialing_channels') || 0;
+            const availableLines = Math.max(0, maxChannels - activeLines);
+            const disparos = Math.min(dialsNeeded, maxDialsPerTick, availableLines);
 
             if (now - this.lastSummaryLog > 10000) {
-                console.log(`[PredictiveEngine] Pacing Loop - Agents: ${availableAgents}, Success Rate: ${(successRate * 100).toFixed(1)}%, Dials Last Min: ${recentDialsCount}/${targetCalls}, Needed: ${dialsNeeded}, Max/Tick: ${maxDialsPerTick}, Disparos: ${disparos}`);
+                console.log(`[PredictiveEngine] Pacing Loop - Agents: ${availableAgents}, Success Rate: ${(successRate * 100).toFixed(1)}%, Active Lines: ${activeLines}/${maxChannels}, Dials Last Min: ${recentDialsCount}/${targetCalls}, Needed: ${dialsNeeded}, Max/Tick: ${maxDialsPerTick}, Disparos: ${disparos}`);
                 this.lastSummaryLog = now;
             }
 
