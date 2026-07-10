@@ -61,14 +61,15 @@ export class PredictiveEngine {
             // 2. Calculate Success Rate (answered vs total in last X minutes)
             let successRate = await this.calculateSuccessRate();
 
-            // Fetch dialer aggressiveness and max channels from settings DB
+            // Fetch dialer aggressiveness, max channels and vitalpbx_context from settings DB
             let aggressiveness = 1.0;
             let maxChannels = 60;
+            let pbxContext = vitalpbxConfig.context;
             try {
                 const dbSettings = await prisma.settings.findMany({
                     where: {
                         key: {
-                            in: ['dialer_aggressiveness', 'dialer_max_channels']
+                            in: ['dialer_aggressiveness', 'dialer_max_channels', 'vitalpbx_context']
                         }
                     }
                 });
@@ -77,6 +78,8 @@ export class PredictiveEngine {
                         aggressiveness = parseFloat(s.value) || 1.0;
                     } else if (s.key === 'dialer_max_channels' && s.value) {
                         maxChannels = parseInt(s.value) || 60;
+                    } else if (s.key === 'vitalpbx_context' && s.value) {
+                        pbxContext = s.value;
                     }
                 }
             } catch (err) {
@@ -263,7 +266,7 @@ export class PredictiveEngine {
                 }
 
                 // Dials customer via AMI and routes to triagem-amd context
-                const destChannel = `Local/${dialedPhone}@${vitalpbxConfig.context}/n`;
+                const destChannel = `Local/${dialedPhone}@${pbxContext}/n`;
                 
                 amiService.originateCall(
                     destChannel,

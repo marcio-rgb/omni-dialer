@@ -4,6 +4,55 @@ import prisma from '../config/db.js';
 
 export class VitalPBXService {
     /**
+     * Helper to load VitalPBX configuration from database settings, falling back to process.env.
+     */
+    static async getPBXConfig() {
+        let apiUrl = vitalpbxConfig.apiUrl;
+        let apiKey = vitalpbxConfig.apiKey;
+        let trunk = vitalpbxConfig.trunk;
+        let context = vitalpbxConfig.context;
+
+        try {
+            const dbSettings = await prisma.settings.findMany({
+                where: {
+                    key: {
+                        in: ['vitalpbx_api_url', 'vitalpbx_api_key', 'vitalpbx_trunk', 'vitalpbx_context', 'vitalpbx_ip', 'vitalpbx_port']
+                    }
+                }
+            });
+            
+            const settings = {};
+            dbSettings.forEach(s => {
+                settings[s.key] = s.value;
+            });
+
+            if (settings.vitalpbx_api_url) {
+                apiUrl = settings.vitalpbx_api_url;
+            } else if (settings.vitalpbx_ip) {
+                const ip = settings.vitalpbx_ip;
+                const port = settings.vitalpbx_port;
+                const protocol = port === '443' ? 'https' : (port === '80' ? 'http' : (port ? 'http' : 'https'));
+                const portStr = (port && port !== '443' && port !== '80') ? `:${port}` : '';
+                apiUrl = `${protocol}://${ip}${portStr}/api/v2`;
+            }
+
+            if (settings.vitalpbx_api_key) {
+                apiKey = settings.vitalpbx_api_key;
+            }
+            if (settings.vitalpbx_trunk) {
+                trunk = settings.vitalpbx_trunk;
+            }
+            if (settings.vitalpbx_context) {
+                context = settings.vitalpbx_context;
+            }
+        } catch (err) {
+            console.error('[VitalPBXService] Error fetching vitalpbx settings from DB:', err.message);
+        }
+
+        return { apiUrl, apiKey, trunk, context };
+    }
+
+    /**
      * Originates a call to a customer's phone number.
      * @param {string} phone Customer's phone number
      * @param {string} leadId ID of the lead in Postgres
@@ -41,10 +90,12 @@ export class VitalPBXService {
             return { status: 'success', channelId, message: 'Mock call originated' };
         }
 
+        const config = await this.getPBXConfig();
+
         try {
-            const response = await axios.post(`${vitalpbxConfig.apiUrl}/calls/originate`, {
-                channel: `${vitalpbxConfig.trunk}/${dialedPhone}`,
-                context: vitalpbxConfig.context,
+            const response = await axios.post(`${config.apiUrl}/calls/originate`, {
+                channel: `${config.trunk}/${dialedPhone}`,
+                context: config.context,
                 extension: 's',
                 priority: 1,
                 callerId: 'DynamicCID',
@@ -56,7 +107,7 @@ export class VitalPBXService {
                 }
             }, {
                 headers: {
-                    'app-key': vitalpbxConfig.apiKey,
+                    'app-key': config.apiKey,
                     'Content-Type': 'application/json'
                 }
             });
@@ -70,11 +121,11 @@ export class VitalPBXService {
     
     /**
      * Originates a manual call bridging an agent's ramal to a customer's phone.
-     * @param {string} ramal Agent's extension number
      * @param {string} phone Customer's phone number
+     * @param {string} ramal Agent's extension number
      * @returns {Promise<object>} Response from VitalPBX
      */
-    static async originateManualCall(ramal, phone) {
+    static async originateManualCall(phone, ramal) {
         // 1. Load prefix from setting
         let prefix = '';
         try {
@@ -100,16 +151,18 @@ export class VitalPBXService {
             return { status: 'success', message: 'Mock manual call originated successfully' };
         }
 
+        const config = await this.getPBXConfig();
+
         try {
-            const response = await axios.post(`${vitalpbxConfig.apiUrl}/calls/originate`, {
+            const response = await axios.post(`${config.apiUrl}/calls/originate`, {
                 channel: `SIP/${ramal}`,
-                context: vitalpbxConfig.context,
+                context: config.context,
                 extension: dialedPhone,
                 priority: 1,
                 callerId: `Agent_${ramal}`
             }, {
                 headers: {
-                    'app-key': vitalpbxConfig.apiKey,
+                    'app-key': config.apiKey,
                     'Content-Type': 'application/json'
                 }
             });
@@ -135,13 +188,15 @@ export class VitalPBXService {
             return { status: 'success', message: 'Mock transfer success' };
         }
 
+        const config = await this.getPBXConfig();
+
         try {
-            const response = await axios.post(`${vitalpbxConfig.apiUrl}/channels/${channelId}/transfer`, {
+            const response = await axios.post(`${config.apiUrl}/channels/${channelId}/transfer`, {
                 destination: destination,
-                context: vitalpbxConfig.context
+                context: config.context
             }, {
                 headers: {
-                    'app-key': vitalpbxConfig.apiKey,
+                    'app-key': config.apiKey,
                     'Content-Type': 'application/json'
                 }
             });
@@ -164,10 +219,12 @@ export class VitalPBXService {
             return { status: 'success', message: 'Mock hangup success' };
         }
 
+        const config = await this.getPBXConfig();
+
         try {
-            const response = await axios.post(`${vitalpbxConfig.apiUrl}/channels/${channelId}/hangup`, {}, {
+            const response = await axios.post(`${config.apiUrl}/channels/${channelId}/hangup`, {}, {
                 headers: {
-                    'app-key': vitalpbxConfig.apiKey,
+                    'app-key': config.apiKey,
                     'Content-Type': 'application/json'
                 }
             });

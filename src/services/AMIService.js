@@ -32,9 +32,42 @@ class AMIService extends EventEmitter {
         this.secret = amiConfig.secret;
     }
 
-    connect() {
+    async connect() {
         if (this.socket) {
             this.socket.destroy();
+        }
+
+        try {
+            const dbSettings = await prisma.settings.findMany({
+                where: {
+                    key: {
+                        in: ['vitalpbx_ip', 'vitalpbx_port', 'ami_host', 'ami_port']
+                    }
+                }
+            });
+
+            let dbIp = null;
+            for (const s of dbSettings) {
+                if ((s.key === 'vitalpbx_ip' || s.key === 'ami_host') && s.value) {
+                    dbIp = s.value;
+                }
+            }
+
+            this.host = dbIp || amiConfig.host;
+            
+            // Asterisk AMI port defaults to 5038 or from env.
+            // If the user explicitly sets ami_port in DB, we use it.
+            // Otherwise, we keep the default.
+            let parsedPort = null;
+            const amiPortSetting = dbSettings.find(s => s.key === 'ami_port');
+            if (amiPortSetting && amiPortSetting.value) {
+                parsedPort = parseInt(amiPortSetting.value);
+            }
+            this.port = parsedPort || amiConfig.port;
+        } catch (err) {
+            console.error('[AMI] Error fetching connection settings from DB:', err.message);
+            this.host = amiConfig.host;
+            this.port = amiConfig.port;
         }
 
         console.log(`[AMI] Connecting to Asterisk at ${this.host}:${this.port}...`);
