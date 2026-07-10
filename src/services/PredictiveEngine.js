@@ -122,7 +122,7 @@ export class PredictiveEngine {
 
             if (disparos > 0) {
                 console.log(`[PredictiveEngine] Tick - Triggering ${disparos} paced disparos (Target: ${targetCalls}, Recent: ${recentDialsCount}).`);
-                await this.triggerDialing(disparos);
+                await this.triggerDialing(disparos, pbxContext);
             }
         } catch (error) {
             console.error('[PredictiveEngine] Error in tick:', error);
@@ -224,7 +224,8 @@ export class PredictiveEngine {
     /**
      * Core dialer execution. Pops leads and originates calls.
      */
-    async triggerDialing(disparos) {
+    async triggerDialing(disparos, pbxContext) {
+        const resolvedPbxContext = pbxContext || vitalpbxConfig.context || 'from-internal';
         // Check queue length
         let queueLength = await redisClient.llen('dialer:lead_queue');
         
@@ -266,7 +267,7 @@ export class PredictiveEngine {
                 }
 
                 // Dials customer via AMI and routes to triagem-amd context
-                const destChannel = `Local/${dialedPhone}@${pbxContext}/n`;
+                const destChannel = `Local/${dialedPhone}@${resolvedPbxContext}/n`;
                 
                 amiService.originateCall(
                     destChannel,
