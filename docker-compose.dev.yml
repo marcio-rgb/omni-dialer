@@ -22,7 +22,7 @@ services:
       - REDIS_HOST=dialer_redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=""
-      - LIVEKIT_URL=http://omnichat_livekit:7880
+      - LIVEKIT_URL=http://172.18.0.1:7880
       - LIVEKIT_API_KEY=devkey
       - LIVEKIT_API_SECRET=secret
       - VITALPBX_API_URL=http://192.168.1.100/api/v2
