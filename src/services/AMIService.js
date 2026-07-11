@@ -37,6 +37,7 @@ class AMIService extends EventEmitter {
             this.socket.destroy();
         }
 
+        try {
             const dbSettings = await prisma.settings.findMany({
                 where: {
                     key: {
