@@ -229,7 +229,7 @@ export class PredictiveEngine {
      */
     async triggerDialing(disparos, pbxContext, pbxTrunk) {
         const resolvedPbxContext = pbxContext || vitalpbxConfig.context || 'from-internal';
-        const resolvedPbxTrunk = pbxTrunk || vitalpbxConfig.trunk;
+        const resolvedPbxTrunk = pbxTrunk !== null && pbxTrunk !== undefined ? pbxTrunk : vitalpbxConfig.trunk;
         // Check queue length
         let queueLength = await redisClient.llen('dialer:lead_queue');
         
@@ -272,8 +272,10 @@ export class PredictiveEngine {
 
                 // Dials customer via AMI and routes to triagem-amd context
                 let destChannel = `Local/${dialedPhone}@${resolvedPbxContext}/n`;
-                if (resolvedPbxTrunk) {
-                    if (resolvedPbxTrunk.includes('/')) {
+                if (resolvedPbxTrunk && resolvedPbxTrunk.trim() !== '') {
+                    if (resolvedPbxTrunk.startsWith('Local/')) {
+                        destChannel = `${resolvedPbxTrunk}/${dialedPhone}@${resolvedPbxContext}/n`;
+                    } else if (resolvedPbxTrunk.includes('/')) {
                         destChannel = `${resolvedPbxTrunk}/${dialedPhone}`;
                     } else {
                         destChannel = `PJSIP/${resolvedPbxTrunk}/${dialedPhone}`;
