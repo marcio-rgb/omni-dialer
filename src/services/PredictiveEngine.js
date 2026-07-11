@@ -61,15 +61,16 @@ export class PredictiveEngine {
             // 2. Calculate Success Rate (answered vs total in last X minutes)
             let successRate = await this.calculateSuccessRate();
 
-            // Fetch dialer aggressiveness, max channels and vitalpbx_context from settings DB
+            // Fetch dialer aggressiveness, max channels, vitalpbx_context and vitalpbx_trunk from settings DB
             let aggressiveness = 1.0;
             let maxChannels = 60;
             let pbxContext = vitalpbxConfig.context;
+            let pbxTrunk = null;
             try {
                 const dbSettings = await prisma.settings.findMany({
                     where: {
                         key: {
-                            in: ['dialer_aggressiveness', 'dialer_max_channels', 'vitalpbx_context']
+                            in: ['dialer_aggressiveness', 'dialer_max_channels', 'vitalpbx_context', 'vitalpbx_trunk']
                         }
                     }
                 });
@@ -80,6 +81,8 @@ export class PredictiveEngine {
                         maxChannels = parseInt(s.value) || 60;
                     } else if (s.key === 'vitalpbx_context' && s.value) {
                         pbxContext = s.value;
+                    } else if (s.key === 'vitalpbx_trunk' && s.value) {
+                        pbxTrunk = s.value;
                     }
                 }
             } catch (err) {
@@ -122,7 +125,7 @@ export class PredictiveEngine {
 
             if (disparos > 0) {
                 console.log(`[PredictiveEngine] Tick - Triggering ${disparos} paced disparos (Target: ${targetCalls}, Recent: ${recentDialsCount}).`);
-                await this.triggerDialing(disparos, pbxContext);
+                await this.triggerDialing(disparos, pbxContext, pbxTrunk);
             }
         } catch (error) {
             console.error('[PredictiveEngine] Error in tick:', error);
@@ -224,8 +227,9 @@ export class PredictiveEngine {
     /**
      * Core dialer execution. Pops leads and originates calls.
      */
-    async triggerDialing(disparos, pbxContext) {
+    async triggerDialing(disparos, pbxContext, pbxTrunk) {
         const resolvedPbxContext = pbxContext || vitalpbxConfig.context || 'from-internal';
+        const resolvedPbxTrunk = pbxTrunk || vitalpbxConfig.trunk;
         // Check queue length
         let queueLength = await redisClient.llen('dialer:lead_queue');
         
@@ -267,7 +271,14 @@ export class PredictiveEngine {
                 }
 
                 // Dials customer via AMI and routes to triagem-amd context
-                const destChannel = `Local/${dialedPhone}@${resolvedPbxContext}/n`;
+                let destChannel = `Local/${dialedPhone}@${resolvedPbxContext}/n`;
+                if (resolvedPbxTrunk) {
+                    if (resolvedPbxTrunk.includes('/')) {
+                        destChannel = `${resolvedPbxTrunk}/${dialedPhone}`;
+                    } else {
+                        destChannel = `PJSIP/${resolvedPbxTrunk}/${dialedPhone}`;
+                    }
+                }
                 
                 amiService.originateCall(
                     destChannel,
