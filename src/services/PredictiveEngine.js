@@ -3,6 +3,7 @@ import prisma from '../config/db.js';
 import redisClient from '../config/redis.js';
 import { activeSockets, getOrCreateContact, getOrCreateSystemUser, getOrCreateConversation, cleanPhonePrefix } from '../routes/calls.js';
 import { amiService } from './AMIService.js';
+import { LiveKitService } from './LiveKitService.js';
 import vitalpbxConfig from '../config/vitalpbx.js';
 
 export class PredictiveEngine {
@@ -569,14 +570,24 @@ export class PredictiveEngine {
                     }
                     await redisClient.set(`dialer:active_call_channel:${agentId}`, channelName, 'EX', 7200);
  
-                    // 5. Emit agent.incoming_call event via active WebSocket to pop CRM data
+                    // 5. Generate LiveKit token for the agent
+                    const agentName = agent.name || `Agent ${agent.id}`;
+                    let agentToken = null;
+                    try {
+                        await LiveKitService.createRoom(roomName);
+                        agentToken = await LiveKitService.generateToken(roomName, agentName, true);
+                    } catch (lkErr) {
+                        console.error('[PredictiveEngine] Error generating LiveKit token:', lkErr.message);
+                    }
+ 
+                    // 6. Emit agent.incoming_call event via active WebSocket to pop CRM data
                     const agentSocket = activeSockets.get(agentId);
                     if (agentSocket && agentSocket.readyState === 1 /* OPEN */) {
                         console.log(`[PredictiveEngine] Emitting incoming call CRM data to Agent ${agentId} via WebSocket`);
                         agentSocket.send(JSON.stringify({
                             event: 'agent.incoming_call',
                             data: {
-                                token: null,
+                                token: agentToken,
                                 room_name: roomName,
                                 cpf: contact.cpf || null,
                                 name: contact.name,
