@@ -229,7 +229,7 @@ export class PredictiveEngine {
      */
     async triggerDialing(disparos, pbxContext, pbxTrunk) {
         const resolvedPbxContext = pbxContext || vitalpbxConfig.context || 'from-internal';
-        const resolvedPbxTrunk = pbxTrunk !== null && pbxTrunk !== undefined ? pbxTrunk : vitalpbxConfig.trunk;
+        const resolvedPbxTrunk = pbxTrunk && pbxTrunk.trim() !== '' ? pbxTrunk : '';
         // Check queue length
         let queueLength = await redisClient.llen('dialer:lead_queue');
         
