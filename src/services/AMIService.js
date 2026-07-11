@@ -37,11 +37,10 @@ class AMIService extends EventEmitter {
             this.socket.destroy();
         }
 
-        try {
             const dbSettings = await prisma.settings.findMany({
                 where: {
                     key: {
-                        in: ['vitalpbx_ip', 'vitalpbx_port', 'ami_host', 'ami_port']
+                        in: ['vitalpbx_ip', 'vitalpbx_port', 'ami_host', 'ami_port', 'ami_user', 'ami_secret']
                     }
                 }
             });
@@ -64,10 +63,19 @@ class AMIService extends EventEmitter {
                 parsedPort = parseInt(amiPortSetting.value);
             }
             this.port = parsedPort || amiConfig.port;
+
+            // Fetch user and secret
+            const amiUserSetting = dbSettings.find(s => s.key === 'ami_user');
+            this.user = (amiUserSetting && amiUserSetting.value) ? amiUserSetting.value : amiConfig.user;
+
+            const amiSecretSetting = dbSettings.find(s => s.key === 'ami_secret');
+            this.secret = (amiSecretSetting && amiSecretSetting.value) ? amiSecretSetting.value : amiConfig.secret;
         } catch (err) {
             console.error('[AMI] Error fetching connection settings from DB:', err.message);
             this.host = amiConfig.host;
             this.port = amiConfig.port;
+            this.user = amiConfig.user;
+            this.secret = amiConfig.secret;
         }
 
         console.log(`[AMI] Connecting to Asterisk at ${this.host}:${this.port}...`);
