@@ -71,15 +71,81 @@ import json
 import websockets
 import time
 import datetime
+import re
+import unicodedata
+import urllib.request
 
 LOG_FILE = "/var/log/asterisk/vosk_amd.log"
+OMNICHAT_API_URL = os.environ.get("OMNICHAT_API_URL", "https://api-omnichat.creditobr.org")
+
+# --- CONFIGURAÇÕES E PESOS ---
+# Scores positivos indicam MÁQUINA, negativos indicam HUMANO
+VOICEMAIL_KEYWORDS = {
+    r'\bcaixa\s+postal\b': 5,
+    r'\bcaixa\b': 2,
+    r'\bmensagem\b': 2,
+    r'\brecado\b': 2,
+    r'\bindisponivel\b': 3,
+    r'\bausente\b': 3,
+    r'\boperadora\b': 3,
+    r'\bvivo\b': 3,
+    r'\bclaro\b': 3,
+    r'\btim\b': 3,
+    r'\bda\s+oi\b': 3,
+    r'\boperadora\s+oi\b': 3,
+    r'\bnao\s+pode\s+atender\b': 4,
+    r'\bdeixe\s+seu\s+recado\b': 5,
+    r'\bestamos\s+impossibilitados\b': 5,
+    r'\bnumero\s+invalido\b': 4,
+    r'\bchamada\s+encaminhada\b': 4,
+    r'\bcaixa\s+de\s+mensagem\b': 5,
+    r'\bdesligado\b': 3,
+    r'\bocupado\b': 3,
+    r'\btemporariamente\b': 3
+}
+
+HUMAN_KEYWORDS = {
+    r'\alo\b': -3,
+    r'\boi\b': -2,
+    r'\bpronto\b': -2,
+    r'\bquem\s+fala\b': -4,
+    r'\bquem\s+esta\b': -4,
+    r'\bestou\b': -2,
+    r'\bpode\s+falar\b': -3,
+    r'\bom\s+dia\b': -2,
+    r'\boa\s+tarde\b': -2,
+    r'\boa\s+noite\b': -2,
+    r'\bquem\b': -2,
+    r'\bpois\s+nao\b': -3,
+    r'\bfale\b': -2,
+    r'\bouco\b': -2
+}
+
+# Compilar Regex Estáticos
+VM_REGEX = {re.compile(k): v for k, v in VOICEMAIL_KEYWORDS.items()}
+HUMAN_REGEX = {re.compile(k): v for k, v in HUMAN_KEYWORDS.items()}
+
+def remover_acentos(texto):
+    return "".join(
+        c for c in unicodedata.normalize("NFD", texto)
+        if unicodedata.category(c) != "Mn"
+    )
+
+def calcular_score_dynamic(text_normalized, vm_patterns):
+    score = 0
+    for pattern, weight in vm_patterns:
+        if pattern.search(text_normalized):
+            score += weight
+    for pattern, weight in HUMAN_REGEX.items():
+        if pattern.search(text_normalized):
+            score += weight
+    return score
 
 def read_agi_env():
     env = {}
     while True:
         line = sys.stdin.readline().strip()
-        if not line:
-            break
+        if not line: break
         if '=' in line:
             key, val = line.split('=', 1)
             env[key] = val
@@ -90,132 +156,140 @@ def send_agi_cmd(cmd):
     sys.stdout.flush()
     return sys.stdin.readline().strip()
 
-def write_log(env, status, duration, text, matched_keywords, error=None):
+def write_log(env, status, duration, text, score, error=None):
     try:
-        unique_id = env.get("agi_uniqueid", "UNKNOWN")
-        channel = env.get("agi_channel", "UNKNOWN")
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        log_line = f"{timestamp} | [{unique_id}] | Channel: {channel} | Status: {status} | Duration: {duration:.2f}s"
-        if text:
-            log_line = log_line + f" | Text: '{text}'"
-        if matched_keywords:
-            log_line = log_line + f" | Matched: {matched_keywords}"
-        if error:
-            log_line = log_line + f" | Error: {error}"
-        log_line = log_line + "\n"
-        
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        unique_id = env.get('agi_uniqueid', 'UNKNOWN')
+        log_line = f"{ts} | [{unique_id}] | Status: {status} | Duration: {duration:.2f}s | Score: {score} | Text: '{text}'"
+        if error: log_line += f" | Error: {error}"
         with open(LOG_FILE, "a") as f:
-            f.write(log_line)
-    except:
-        pass
+            f.write(log_line + "\n")
+    except: pass
 
-VOICEMAIL_KEYWORDS = ["caixa", "mensagem", "recado", "postal", "sinal", "indisponivel", "ausente", "encaminhada", "operadora", "ocupado", "desligado"]
-HUMAN_KEYWORDS = ["alo", "oi", "pronto", "ola", "quem", "fala", "tarde", "dia", "noite"]
+def fetch_settings_from_api():
+    try:
+        url = f"{OMNICHAT_API_URL}/api/public/settings/vosk"
+        req = urllib.request.Request(url, headers={'User-Agent': 'VoskAMD-AGI'})
+        with urllib.request.urlopen(req, timeout=2.0) as response:
+            if response.status == 200:
+                return json.loads(response.read().decode('utf-8'))
+    except Exception as e:
+        sys.stderr.write(f"Error fetching settings: {e}\n")
+    return None
 
 async def main():
     env = read_agi_env()
-    
-    status = "HUMAN"
-    duration = 0.0
-    text_log = ""
-    matched_keywords = []
-    error_log = None
     start_time = time.time()
     
+    settings = fetch_settings_from_api() or {}
+    
+    vosk_url = settings.get("vosk_server_url", "ws://127.0.0.1:2700")
+    max_duration = float(settings.get("vosk_max_duration", 5000)) / 1000.0
+    speech_timeout = float(settings.get("vosk_speech_timeout", 1500)) / 1000.0
+    max_words = int(settings.get("vosk_max_words", 4))
+    
+    voicemail_words_str = settings.get("vosk_voicemail_words")
+    if voicemail_words_str:
+        words = [w.strip() for w in voicemail_words_str.split(",") if w.strip()]
+        vm_patterns = [(re.compile(rf"\b{re.escape(w)}\b"), 5) for w in words]
+    else:
+        vm_patterns = list(VM_REGEX.items())
+
+    state = {
+        "status": "HUMAN",
+        "score_final": 0,
+        "text_log": "",
+        "speech_started": False,
+        "speech_start_time": 0.0,
+        "last_speech_time": time.time()
+    }
+
+    async def receive_responses(websocket):
+        try:
+            async for message in websocket:
+                res = json.loads(message)
+                text = res.get("partial", "") or res.get("text", "")
+                
+                if text:
+                    if not state["speech_started"]:
+                        state["speech_started"] = True
+                        state["speech_start_time"] = time.time()
+                    
+                    state["last_speech_time"] = time.time()
+                    
+                    if time.time() - state["speech_start_time"] < 0.5:
+                        continue
+
+                    text_norm = remover_acentos(text.lower())
+                    state["text_log"] = text
+                    state["score_final"] = calcular_score_dynamic(text_norm, vm_patterns)
+                    
+                    if state["score_final"] >= 5:
+                        state["status"] = "MACHINE"
+                        break
+                    if state["score_final"] <= -5:
+                        state["status"] = "HUMAN"
+                        break
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            sys.stderr.write(f"Vosk recv error: {e}\n")
+
     try:
         audio_fd = 3
         if not os.path.exists(f"/proc/self/fd/{audio_fd}"):
-            send_agi_cmd("VERBOSE \"EAGI Audio FD 3 not found, defaulting to HUMAN\" 1")
             send_agi_cmd("SET VARIABLE VOSK_AMD_STATUS HUMAN")
-            write_log(env, "HUMAN", 0.0, "", [], error="EAGI Audio FD 3 not found")
+            write_log(env, "HUMAN", 0.0, "", 0, error="EAGI Audio FD 3 not found")
             return
 
         audio_stream = open(audio_fd, 'rb', buffering=0)
-
-        uri = "ws://127.0.0.1:2700"
-        async with websockets.connect(uri) as websocket:
+        async with websockets.connect(vosk_url) as websocket:
             await websocket.send(json.dumps({"config": {"sample_rate": 8000.0}}))
 
-            max_duration = 3.5
-            loop = asyncio.get_running_loop()
+            recv_task = asyncio.create_task(receive_responses(websocket))
 
-            while time.time() - start_time < max_duration:
-                chunk = await loop.run_in_executor(None, audio_stream.read, 1600)
-                if not chunk:
-                    break
-
+            while time.time() - start_time < max_duration and state["status"] == "HUMAN":
+                chunk = await asyncio.get_event_loop().run_in_executor(None, audio_stream.read, 3200)
+                if not chunk: break
                 await websocket.send(chunk)
 
-                try:
-                    response_json = await asyncio.wait_for(websocket.recv(), timeout=0.01)
-                    res = json.loads(response_json)
+                if state["status"] == "MACHINE":
+                    break
+
+                if state["speech_started"] and (time.time() - state["last_speech_time"]) > speech_timeout:
+                    break
+
+                await asyncio.sleep(0.01)
+
+            recv_task.cancel()
+            try:
+                await recv_task
+            except:
+                pass
+
+            if state["status"] == "HUMAN":
+                if state["speech_started"]:
+                    word_count = len(state["text_log"].split())
                     
-                    text = ""
-                    if "partial" in res:
-                        text = res["partial"].lower()
-                    elif "text" in res:
-                        text = res["text"].lower()
-
-                    if text:
-                        text_log = text
-                        # Check VM keywords
-                        vm_matched = [kw for kw in VOICEMAIL_KEYWORDS if kw in text]
-                        if vm_matched:
-                            status = "MACHINE"
-                            matched_keywords = vm_matched
-                            send_agi_cmd(f"VERBOSE \"Vosk AMD: Machine detected by keyword: {text}\" 2")
-                            break
-                        
-                        # Check Human keywords
-                        human_matched = [kw for kw in HUMAN_KEYWORDS if kw in text]
-                        if human_matched:
-                            status = "HUMAN"
-                            matched_keywords = human_matched
-                            send_agi_cmd(f"VERBOSE \"Vosk AMD: Human detected by keyword: {text}\" 2")
-                            break
-
-                except asyncio.TimeoutError:
-                    pass
-
-            duration = time.time() - start_time
-
-            if status == "HUMAN":
-                await websocket.send('{"eof" : 1}')
-                final_res = json.loads(await websocket.recv())
-                final_text = final_res.get("text", "").lower()
-                
-                if final_text:
-                    text_log = final_text
-                    vm_matched = [kw for kw in VOICEMAIL_KEYWORDS if kw in final_text]
-                    human_matched = [kw for kw in HUMAN_KEYWORDS if kw in final_text]
-                    
-                    if vm_matched:
-                        status = "MACHINE"
-                        matched_keywords = vm_matched
-                    elif human_matched:
-                        status = "HUMAN"
-                        matched_keywords = human_matched
+                    if word_count > max_words and (time.time() - state["speech_start_time"]) < 2.5:
+                        state["status"] = "MACHINE"
+                    elif state["score_final"] > 0:
+                        state["status"] = "MACHINE"
+                    elif word_count >= 8 and not any(h_pat.search(remover_acentos(state["text_log"].lower())) for h_pat in HUMAN_REGEX):
+                        state["status"] = "MACHINE"
                     else:
-                        word_count = len(final_text.split())
-                        if word_count > 4:
-                            status = "MACHINE"
-                            matched_keywords = [f"word_count_gt_4 ({word_count} words)"]
-                        else:
-                            status = "HUMAN"
-                            matched_keywords = [f"word_count_le_4 ({word_count} words)"]
+                        state["status"] = "HUMAN"
+                else:
+                    state["status"] = "MACHINE"
 
     except Exception as e:
-        error_log = str(e)
-        send_agi_cmd(f"VERBOSE \"Vosk AMD Error: {error_log}\" 1")
-        status = "HUMAN"
-        duration = time.time() - start_time
+        state["status"] = "HUMAN"
+        write_log(env, state["status"], time.time() - start_time, state["text_log"], state["score_final"], error=str(e))
+        send_agi_cmd(f"SET VARIABLE VOSK_AMD_STATUS {state['status']}")
+        return
 
-    send_agi_cmd(f"SET VARIABLE VOSK_AMD_STATUS {status}")
-    send_agi_cmd(f"VERBOSE \"Vosk AMD Finished. Result is {status}\" 1")
-    
-    # Write to local log file
-    write_log(env, status, duration, text_log, matched_keywords, error=error_log)
+    send_agi_cmd(f"SET VARIABLE VOSK_AMD_STATUS {state['status']}")
+    write_log(env, state["status"], time.time() - start_time, state["text_log"], state["score_final"])
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -233,6 +307,7 @@ O Dialplan foi modificado para substituir a chamada da aplicação clássica de 
 ```asterisk
 [triagem-amd]
 exten => s,1,NoOp(Chamada atendida pelo cliente. Iniciando triagem AMD com Vosk...)
+same => n,GotoIf($["${BYPASS_VOSK}" = "1"]?humano)
 same => n,EAGI(vosk_amd.py)
 same => n,NoOp(Resultado do Vosk AMD: ${VOSK_AMD_STATUS})
 same => n,GotoIf($["${VOSK_AMD_STATUS}" = "HUMAN"]?humano:maquina)
@@ -324,4 +399,113 @@ Cada chamada gera um registro detalhado em uma única linha estruturada:
 3.  **Vosk-pt retornando erros de conexão:**
     *   *Causa:* O contêiner Docker `vosk-pt` travou ou não está de pé na porta `2700`.
     *   *Solução:* Rode `docker ps` para ver se o contêiner está ativo. Reinicie se necessário com `docker restart vosk-pt`.
+
+---
+
+## 7. Estratégia para Não Usar Vosk AMD (AMD Externo/Operadora)
+
+Quando o cliente opta por contratar uma operadora de telefonia (Trunk SIP) que já fornece o serviço de detecção de caixa postal (AMD) diretamente na rede celular/fixa, a execução da análise de transcrição local pelo Vosk torna-se desnecessária e prejudicial (pois introduz um delay de cerca de 3,5 segundos de silêncio/fala antes de transferir a chamada ao operador).
+
+### A Estratégia: Criar outro dialplan ou adaptar o mesmo?
+**A melhor estratégia é adaptar o mesmo dialplan (`[triagem-amd]`) utilizando roteamento condicional por variável de canal.**
+
+#### Por que NÃO criar outro dialplan/contexto?
+1. **Simplicidade de Código:** Evita a necessidade de gerenciar múltiplos contextos dinâmicos no código do discador (`PredictiveEngine.js`), mantendo a origem de chamada sempre fixa para o mesmo destino.
+2. **Coesão e Rastreabilidade:** Todos os logs de depuração do canal e o fluxo de eventos de atendimento passam pelo mesmo ponto, facilitando o diagnóstico.
+
+#### Como funciona a adaptação:
+Enviamos a variável de canal `BYPASS_VOSK=1` a partir do `PredictiveEngine.js` ao disparar a chamada. No dialplan do Asterisk (`/etc/asterisk/vitalpbx/extensions__00custom.conf`), fazemos um desvio condicional antes de chamar o script do Vosk:
+
+```asterisk
+[triagem-amd]
+exten => s,1,NoOp(Chamada atendida pelo cliente. Iniciando triagem AMD com Vosk...)
+same => n,GotoIf($["${BYPASS_VOSK}" = "1"]?humano) ; <-- SE BYPASS ATIVO, VAI DIRETO PRO OPERADOR
+same => n,EAGI(vosk_amd.py)
+same => n,NoOp(Resultado do Vosk AMD: ${VOSK_AMD_STATUS})
+same => n,GotoIf($["${VOSK_AMD_STATUS}" = "HUMAN"]?humano:maquina)
+
+; Se for Caixa Postal ou Robô (MACHINE)
+same => n(maquina),NoOp(Detectado Caixa Postal/Robo. Desligando...)
+same => n,Hangup()
+
+; Se for uma pessoa real (HUMAN)
+same => n(humano),NoOp(Humano detectado! Notificando o Dialer Backend...)
+same => n,UserEvent(PredictiveHuman,ChannelId: ${CHANNEL},Phone: ${PHONE},LeadId: ${LEAD_ID},CampaignId: ${CAMPAIGN_ID})
+same => n,Wait(5)
+same => n,Hangup()
+```
+
+Com isso, o fluxo de eventos e atendimento permanece idêntico, mas o Asterisk pula a execução do Vosk e entrega a chamada imediatamente ao operador quando o cliente atende.
+
+---
+
+## 8. Gerenciamento e Controle das Salas dos Agentes no LiveKit
+
+O discador gerencia o áudio bidirecional integrando o cliente (via telefonia tradicional convertida em SIP) e o agente (via WebRTC no navegador) dentro de salas dedicadas do LiveKit.
+
+### A Chave e o Nome da Sala
+O nome das salas no discador segue um padrão rígido gerado a partir do ID exclusivo do agente:
+* **Chave da Sala:** `sala_agente_${agentId}` (exemplo: para o agente com ID `12`, a sala será `sala_agente_12`).
+* **Motivo do Padrão:** O agente possui uma sala "estática" pessoal no LiveKit. Quando ele fica online, ele já se conecta a essa sala e aguarda nela. As ligações telefônicas dos clientes são então transferidas para dentro desta mesma sala.
+
+### Ciclo de Abertura e Controle da Sala
+
+```
++--------------------------------------------------------------------------+
+| 1. AGENTE FICA ONLINE                                                    |
+|                                                                          |
+|  [Navegador] --- (WS: agent.update_status: 'disponivel') ---> [Backend]  |
+|                                                                          |
+|  [Backend]  --- (Cria sala 'sala_agente_{id}' no LiveKit) --------------->  |
+|  [Backend]  --- (Gera token JWT com privilégios de agente) ------------->  |
+|  [Backend]  --- (WS: agent.status_updated + token) -------> [Navegador]  |
+|                                                                          |
+|  [Navegador] --- (Conecta WebRTC na sala com JWT)                         |
+|  [Navegador] --- (WS: agent.ready_for_calls) --------------> [Backend]  |
+|  * O Agente é inserido na fila dialer:idle_agents no Redis.               |
++--------------------------------------------------------------------------+
+                                    |
+                                    v
++--------------------------------------------------------------------------+
+| 2. BRIDGE DE CHAMADA ATENDIDA                                             |
+|                                                                          |
+|  * O motor de discagem identifica humano atendido (UserEvent).           |
+|  * Retira o agente mais ocioso da fila 'dialer:idle_agents'.             |
+|  * Atualiza o status do agente no Postgres para 'ocupado'.               |
+|  * Envia comando de redirecionamento (Redirect) ao Asterisk:            |
+|                                                                          |
+|    SetVar: AGENT_ROOM = sala_agente_{id}                                 |
+|    Redirect: Canal do Cliente -> Extensão 9999 em cos-all-custom         |
++--------------------------------------------------------------------------+
+                                    |
+                                    v
++--------------------------------------------------------------------------+
+| 3. CONEXÃO SIP TELEFONIA <--> LIVEKIT                                    |
+|                                                                          |
+|  * O dialplan na extensão 9999 recebe o canal do cliente.                |
+|  * Executa a discagem para o tronco SIP do LiveKit:                      |
+|                                                                          |
+|    Dial(PJSIP/livekit-sip/sip:${AGENT_ROOM}@livekit-sip:5060)            |
+|                                                                          |
+|  * O áudio do celular do cliente entra na sala 'sala_agente_{id}' via SIP.|
+|  * Como o agente já está na sala via WebRTC, a conversa se inicia.       |
++--------------------------------------------------------------------------+
+                                    |
+                                    v
++--------------------------------------------------------------------------+
+| 4. ENCERRAMENTO (HANGUP)                                                 |
+|                                                                          |
+|  * Se o agente desligar (WS: agent.hangup_call) ou o cliente desligar:   |
+|  * O discador executa Hangup no canal Asterisk correspondente.           |
+|  * Limpa a chave 'dialer:active_call_channel:{agentId}' no Redis.        |
+|  * Restabelece o status do agente para 'disponivel' e o insere de volta  |
+|    no topo da fila de ociosos (reiniciando o ciclo).                     |
++--------------------------------------------------------------------------+
+```
+
+### Limpeza e Prevenção de Canais Presos
+Para evitar que chamadas fiquem "presas" no Asterisk ou consumindo licenças do LiveKit em caso de problemas na rede do agente:
+* **Queda do WebSocket:** Se o agente fechar a guia ou perder a conexão de internet, o evento `close` do socket é disparado no discador.
+* **Ação Automática:** O discador busca imediatamente a chave `dialer:active_call_channel:${agentId}` no Redis. Se houver um canal ativo associado a este agente, o discador envia um comando `Hangup` via AMI ao Asterisk para desligar a chamada do cliente imediatamente, evitando chamadas presas na operadora.
+
 

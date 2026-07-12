@@ -17,6 +17,7 @@ export class PredictiveEngine {
 
         this.lastSummaryLog = 0;
         this.lastMetricsPublish = 0;
+        this.aiAgentStatusIntervalId = null;
     }
 
     /**
@@ -34,6 +35,9 @@ export class PredictiveEngine {
         
         // Start cleanup routine every 10 seconds to prune stale dialing calls
         this.cleanupIntervalId = setInterval(() => this.cleanupExpiredDialingCalls(), 10000);
+
+        // Start AI agent status sync daemon every 5 seconds
+        this.aiAgentStatusIntervalId = setInterval(() => this.syncAiAgentsStatus(), 5000);
     }
 
     /**
@@ -44,6 +48,9 @@ export class PredictiveEngine {
         this.running = false;
         clearInterval(this.intervalId);
         clearInterval(this.cleanupIntervalId);
+        if (this.aiAgentStatusIntervalId) {
+            clearInterval(this.aiAgentStatusIntervalId);
+        }
         console.log('[PredictiveEngine] Predictive loop stopped.');
     }
 
@@ -66,11 +73,12 @@ export class PredictiveEngine {
             let maxChannels = 60;
             let pbxContext = vitalpbxConfig.context;
             let pbxTrunk = null;
+            let useVoskAmd = true;
             try {
                 const dbSettings = await prisma.settings.findMany({
                     where: {
                         key: {
-                            in: ['dialer_aggressiveness', 'dialer_max_channels', 'vitalpbx_context', 'vitalpbx_trunk']
+                            in: ['dialer_aggressiveness', 'dialer_max_channels', 'vitalpbx_context', 'vitalpbx_trunk', 'dialer_use_vosk_amd']
                         }
                     }
                 });
@@ -83,6 +91,8 @@ export class PredictiveEngine {
                         pbxContext = s.value;
                     } else if (s.key === 'vitalpbx_trunk' && s.value) {
                         pbxTrunk = s.value;
+                    } else if (s.key === 'dialer_use_vosk_amd') {
+                        useVoskAmd = s.value !== 'false';
                     }
                 }
             } catch (err) {
@@ -125,7 +135,7 @@ export class PredictiveEngine {
 
             if (disparos > 0) {
                 console.log(`[PredictiveEngine] Tick - Triggering ${disparos} paced disparos (Target: ${targetCalls}, Recent: ${recentDialsCount}).`);
-                await this.triggerDialing(disparos, pbxContext, pbxTrunk);
+                await this.triggerDialing(disparos, pbxContext, pbxTrunk, useVoskAmd);
             }
         } catch (error) {
             console.error('[PredictiveEngine] Error in tick:', error);
@@ -227,7 +237,7 @@ export class PredictiveEngine {
     /**
      * Core dialer execution. Pops leads and originates calls.
      */
-    async triggerDialing(disparos, pbxContext, pbxTrunk) {
+    async triggerDialing(disparos, pbxContext, pbxTrunk, useVoskAmd = true) {
         const resolvedPbxContext = pbxContext || vitalpbxConfig.context || 'from-internal';
         const resolvedPbxTrunk = pbxTrunk && pbxTrunk.trim() !== '' ? pbxTrunk : '';
         // Check queue length
@@ -282,16 +292,23 @@ export class PredictiveEngine {
                     }
                 }
                 
+                const variables = {
+                    LEAD_ID: String(lead.id),
+                    CAMPAIGN_ID: String(lead.campaignId),
+                    PHONE: dialedPhone
+                };
+
+                // Add flag to bypass Vosk AMD in Asterisk dialplan if configured
+                if (!useVoskAmd) {
+                    variables.BYPASS_VOSK = '1';
+                }
+
                 amiService.originateCall(
                     destChannel,
                     'triagem-amd',
                     's',
                     1,
-                    {
-                        LEAD_ID: String(lead.id),
-                        CAMPAIGN_ID: String(lead.campaignId),
-                        PHONE: dialedPhone
-                    }
+                    variables
                 );
 
                 // Cache call details in Redis with a TTL of 60 seconds (ringing timeout fallback)
@@ -583,6 +600,15 @@ export class PredictiveEngine {
                                 phone: cleanPhone
                             }
                         }));
+                    } else if (agent.role === 'ai_agent') {
+                        console.log(`[PredictiveEngine] Publishing incoming call for AI Agent ${agentId} to Redis PubSub.`);
+                        await redisClient.publish('omniagent:incoming_call', JSON.stringify({
+                            agent_id: agentId,
+                            room_name: roomName,
+                            phone: cleanPhone,
+                            conversation_id: conversation.id,
+                            contact_id: contact.id
+                        }));
                     }
  
                     // 6. Redirect the customer's channel to the agent's room in Asterisk dialplan
@@ -618,11 +644,56 @@ export class PredictiveEngine {
                     // 9. Remove from Redis active dialing sets
                     await redisClient.srem('dialer:active_dialing_channels', LeadId);
                     await redisClient.del(`dialer:dialing_calls:${LeadId}`);
-
                 } catch (err) {
-                    console.error('[PredictiveEngine] Error handling PredictiveHuman event:', err);
+                    console.error('[PredictiveEngine] Error connecting call to Agent:', err.message);
                 }
             }
         });
+    }
+
+    /**
+     * Periodically syncs AI agents availability in Postgres to Redis ZSET.
+     */
+    async syncAiAgentsStatus() {
+        try {
+            // Find all active AI agents
+            const aiAgents = await prisma.users.findMany({
+                where: {
+                    role: 'ai_agent',
+                    is_active: true
+                }
+            });
+
+            for (const agent of aiAgents) {
+                const agentId = agent.id;
+                
+                // If the agent is set to 'disponivel' in DB
+                if (agent.agent_status === 'disponivel') {
+                    // Check if they have an active call in Redis
+                    const hasActiveCall = await redisClient.get(`dialer:active_call_channel:${agentId}`);
+                    if (hasActiveCall) {
+                        // If they are in a call, make sure they are not in the idle list
+                        await redisClient.zrem('dialer:idle_agents', agentId);
+                        continue;
+                    }
+                    
+                    // Check if already in idle list
+                    const score = await redisClient.zscore('dialer:idle_agents', agentId);
+                    if (score === null) {
+                        console.log(`[PredictiveEngine] Adding AI Agent ${agent.name} (${agentId}) to idle queue.`);
+                        await redisClient.zadd('dialer:idle_agents', Date.now(), agentId);
+                    }
+                } else {
+                    // If status is not 'disponivel', remove from idle queue
+                    const score = await redisClient.zscore('dialer:idle_agents', agentId);
+                    if (score !== null) {
+                        console.log(`[PredictiveEngine] Removing AI Agent ${agent.name} (${agentId}) from idle queue (status: ${agent.agent_status}).`);
+                        await redisClient.zrem('dialer:idle_agents', agentId);
+                    }
+                }
+            }
+        } catch (err) {
+            console.error('[PredictiveEngine] Error syncing AI agents status:', err.message);
+        }
     }
 }
