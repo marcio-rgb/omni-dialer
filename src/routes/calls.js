@@ -763,13 +763,8 @@ export default async function callRoutes(fastify, opts) {
                 return { status: 'success', message: 'Manual WebRTC call bridged successfully' };
             }
 
-            // 1. Pop the agent that has been idle (ocioso) the longest atomically from Redis ZSET
-            const popped = await redisClient.zpopmin('dialer:idle_agents', 1);
-            
-            let agentId = null;
-            if (popped && popped.length > 0) {
-                agentId = popped[0]; // Popped member is the first item in the array returned by ioredis zpopmin
-            }
+            console.log(`[Webhook] Non-manual call answered on channel ${channelId}. Ignoring webhook (will be handled by PredictiveEngine/Asterisk directly).`);
+            return { status: 'ignored', message: 'Non-manual calls are ignored by the answered webhook' };
 
             // --- RULE: CONTROLE DE ABANDONO (Abandon Prevention) ---
             if (!agentId) {
