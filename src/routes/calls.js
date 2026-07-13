@@ -5,6 +5,7 @@ import redisClient from '../config/redis.js';
 import { VitalPBXService } from '../services/VitalPBXService.js';
 import { LiveKitService } from '../services/LiveKitService.js';
 import { amiService } from '../services/AMIService.js';
+import { ElevenLabsService } from '../services/ElevenLabsService.js';
 
 // In-memory registry to track agent WebSocket connections
 export const activeSockets = new Map();
@@ -71,7 +72,7 @@ export default async function callRoutes(fastify, opts) {
         console.log(`[AMI] OriginateResponse received. ActionID: ${actionId}, Response: ${event.Response}, Reason: ${event.Reason}`);
 
         const isManual = actionId.startsWith('manual_');
-        const isWebRTC = actionId.startsWith('webrtc_');
+        const isWebRTC = actionId.startsWith('webrtc_') || actionId.startsWith('conf_customer_');
 
         if (isManual || isWebRTC) {
             const parts = actionId.split('_');
@@ -224,7 +225,11 @@ export default async function callRoutes(fastify, opts) {
 
                 // Remove the mapping
                 await redisClient.del(`dialer:predictive_call_agent:${uniqueId}`);
-                await redisClient.del(`dialer:active_call_channel:${predictiveAgentId}`);
+                
+                const agentObj = await prisma.users.findUnique({ where: { id: predictiveAgentId } });
+                if (agentObj && agentObj.role !== 'ai_agent') {
+                    await redisClient.del(`dialer:active_call_channel:${predictiveAgentId}`);
+                }
 
                 // 1. Reset agent status to "disponivel" in DB
                 await prisma.users.update({
@@ -247,6 +252,31 @@ export default async function callRoutes(fastify, opts) {
                             ended_at: new Date()
                         }
                     });
+
+                    // Add AI Agent back to idle list immediately if under capacity
+                    if (agentObj && agentObj.role === 'ai_agent' && agentObj.agent_status === 'disponivel') {
+                        const activeCallsCount = await prisma.calls.count({
+                            where: { agent_id: predictiveAgentId, status: 'active' }
+                        });
+                        const teamUsers = await prisma.team_users.findMany({
+                            where: { user_id: predictiveAgentId },
+                            select: { team_id: true }
+                        });
+                        const teamIds = teamUsers.map(tu => tu.team_id);
+                        const teams = await prisma.teams.findMany({
+                            where: { id: { in: teamIds } }
+                        });
+                        let maxCapacity = 1;
+                        for (const t of teams) {
+                            if (t.team_type === 'ai_agent') {
+                                maxCapacity = Math.max(maxCapacity, t.max_channels || 1);
+                            }
+                        }
+                        if (activeCallsCount < maxCapacity) {
+                            await redisClient.zadd('dialer:idle_agents', Date.now(), predictiveAgentId);
+                            console.log(`[AMI] AI Agent ${agentObj.name} returned to idle queue after predictive call ended. Capacity: ${activeCallsCount}/${maxCapacity}`);
+                        }
+                    }
                 } catch (dbErr) {
                     console.error('[AMI] Error updating calls table on predictive hangup:', dbErr.message);
                 }
@@ -527,7 +557,7 @@ export default async function callRoutes(fastify, opts) {
      * Triggers Asterisk via AMI to call a customer and bridge them to the agent's WebRTC LiveKit room.
      */
     fastify.post('/manual-webrtc', async (request, reply) => {
-        const { phone, roomName, agentId } = request.body || {};
+        const { phone, roomName, agentId, aiAgentId } = request.body || {};
 
         if (!phone || !roomName || !agentId) {
             reply.code(400);
@@ -536,6 +566,109 @@ export default async function callRoutes(fastify, opts) {
 
         try {
             const dialedPhone = await getDialedPhoneWithPrefix(phone);
+
+            // If AI Agent call, do ConfBridge dial flow
+            if (aiAgentId) {
+                console.log(`[ManualWebRTC] ConfBridge routing for AI Agent: ${aiAgentId} to phone: ${dialedPhone} in room: ${roomName}`);
+                
+                // Track manual call info in Redis for OriginateResponse mapping
+                await redisClient.set(`dialer:manual_call_info:${agentId}`, JSON.stringify({
+                    roomName,
+                    phone: dialedPhone
+                }), 'EX', 600);
+
+                // Increment daily total calls counter in Redis
+                const todayStr = new Date().toISOString().split('T')[0];
+                const totalKey = `dialer:stats:${todayStr}:total`;
+                await redisClient.incr(totalKey);
+                await redisClient.expire(totalKey, 86400);
+
+                // Check if we are in local development
+                const sipHost = process.env.LIVEKIT_SIP_HOST || 'livekit-sip:5060';
+                const sipTrunk = process.env.LIVEKIT_SIP_TRUNK || 'anonymous';
+                let destData = `PJSIP/${sipTrunk}/sip:${roomName}@${sipHost}`;
+                const lkUrl = process.env.LIVEKIT_URL || '';
+                if (lkUrl.includes('localhost') || lkUrl.includes('127.0.0.1') || lkUrl.includes('omnichat_livekit')) {
+                    try {
+                        const ipRes = await fetch('https://api.ipify.org');
+                        if (ipRes.ok) {
+                            const publicIp = (await ipRes.text()).trim();
+                            destData = `PJSIP/${sipTrunk}/sip:${roomName}@${publicIp}:5065`;
+                            console.log(`[ManualWebRTC] Local development detected. Dialing via public IP: ${destData}`);
+                        }
+                    } catch (ipErr) {
+                        console.error('[ManualWebRTC] Failed to fetch public IP for local development:', ipErr.message);
+                    }
+                }
+
+                // Dial customer and route to ConfBridge
+                amiService.originateCall(
+                    `Local/dial_out${dialedPhone}@ami-dinamico/n`, // Channel
+                    'ami-dinamico',                                // Context
+                    dialedPhone,                                   // Extension
+                    1,                                             // Priority
+                    {
+                        AGENT_ID: String(agentId),
+                        PHONE: dialedPhone
+                    },
+                    `conf_customer_${agentId}_${Date.now()}`       // ActionID (matches conf_customer_)
+                );
+
+                // Dial LiveKit SIP and route to same ConfBridge
+                amiService.originateCall(
+                    destData,                                      // Channel
+                    'ami-dinamico',                                // Context
+                    dialedPhone,                                   // Extension
+                    1,                                             // Priority
+                    {
+                        AGENT_ID: String(agentId),
+                        PHONE: dialedPhone
+                    },
+                    `conf_livekit_${agentId}_${Date.now()}`        // ActionID (ignored, but starts with conf_livekit_)
+                );
+
+                return { success: true, mode: 'confbridge' };
+            }
+
+            // Check if AI Agent uses ElevenLabs and direct SIP is enabled
+            let isElevenLabsDirect = false;
+            let elevenlabsAgentId = null;
+            try {
+                const aiConfig = await prisma.$queryRaw`
+                    SELECT llm_provider, elevenlabs_agent_id 
+                    FROM user_ai_configs 
+                    WHERE user_id = ${agentId}
+                `;
+                if (aiConfig && aiConfig.length > 0 && aiConfig[0].llm_provider === 'elevenlabs') {
+                    elevenlabsAgentId = aiConfig[0].elevenlabs_agent_id;
+                    if (process.env.USE_ELEVENLABS_SIP_OUTBOUND === 'true' && elevenlabsAgentId) {
+                        isElevenLabsDirect = true;
+                    }
+                }
+            } catch (dbErr) {
+                console.error(`[ManualWebRTC] Error checking AI config for agent ${agentId}:`, dbErr.message);
+            }
+
+            if (isElevenLabsDirect && elevenlabsAgentId) {
+                console.log(`[ManualWebRTC] Triggering manual call via ElevenLabs SIP outbound call for agent ${agentId} (Agent ID: ${elevenlabsAgentId}) to ${dialedPhone}`);
+                try {
+                    await ElevenLabsService.outboundCall({
+                        agentId: elevenlabsAgentId,
+                        toNumber: dialedPhone
+                    });
+                    
+                    // Increment daily total calls counter in Redis
+                    const todayStr = new Date().toISOString().split('T')[0];
+                    const totalKey = `dialer:stats:${todayStr}:total`;
+                    await redisClient.incr(totalKey);
+                    await redisClient.expire(totalKey, 86400);
+                    
+                    return { success: true, mode: 'elevenlabs_sip' };
+                } catch (elErr) {
+                    console.error(`[ManualWebRTC] ElevenLabs outbound call failed, falling back to standard WebRTC flow:`, elErr.message);
+                }
+            }
+
             console.log(`[ManualWebRTC] Triggering manual WebRTC call via AMI to ${dialedPhone} for Room ${roomName} (Agent: ${agentId})`);
 
             // Increment daily total calls counter in Redis
@@ -641,6 +774,46 @@ export default async function callRoutes(fastify, opts) {
             // --- RULE: CONTROLE DE ABANDONO (Abandon Prevention) ---
             if (!agentId) {
                 console.warn(`[Webhook] ZERO available agents for answered call on channel ${channelId}. Executing abandonment protocol.`);
+
+                // Check if return extension is configured
+                let returnExt = null;
+                try {
+                    const returnSetting = await prisma.settings.findUnique({
+                        where: { key: 'dialer_return_extension' }
+                    });
+                    returnExt = returnSetting?.value;
+                } catch (dbErr) {
+                    console.error('[Webhook] Error fetching return extension:', dbErr.message);
+                }
+
+                if (returnExt && returnExt.trim() !== '') {
+                    console.log(`[Webhook] Redirecting channel ${channelId} to return extension: ${returnExt}`);
+                    try {
+                        const config = await VitalPBXService.getPBXConfig();
+                        await VitalPBXService.transferCallToExtension(channelId, returnExt, config.context);
+
+                        // Save call in call_history as "Retorno"
+                        const contact = await getOrCreateContact(phone, leadId);
+                        const systemUser = await getOrCreateSystemUser();
+                        await prisma.call_history.create({
+                            data: {
+                                cliente_id: contact.id,
+                                agente_id: systemUser.id,
+                                status: 'Retorno',
+                                duracao: 0,
+                                data_inicio: new Date()
+                            }
+                        });
+
+                        // Clean up dialing tracking in Redis
+                        await redisClient.srem('dialer:active_dialing_channels', channelId);
+                        await redisClient.del(`dialer:dialing_calls:${channelId}`);
+
+                        return { status: 'redirected', message: `Call transferred to return extension ${returnExt}` };
+                    } catch (transErr) {
+                        console.error(`[Webhook] Failed to transfer channel ${channelId} to return extension:`, transErr.message);
+                    }
+                }
 
                 // 1. Command VitalPBX to hangup the call immediately (< 2 seconds)
                 await VitalPBXService.hangupCall(channelId);

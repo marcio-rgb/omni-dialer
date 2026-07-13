@@ -24,7 +24,7 @@ services:
       - REDIS_PASSWORD=""
       - LIVEKIT_URL=http://172.18.0.1:7880
       - LIVEKIT_API_KEY=devkey
-      - LIVEKIT_API_SECRET=secret
+      - LIVEKIT_API_SECRET=devkeysecret32characterslongpass123
       - VITALPBX_API_URL=http://192.168.1.100/api/v2
       - VITALPBX_API_KEY=api_key_here
       - VITALPBX_TRUNK=Local/sip:SHAMPATEL

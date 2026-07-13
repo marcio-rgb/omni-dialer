@@ -283,6 +283,8 @@ model teams {
   description   String?
   created_at    DateTime        @default(now())
   updated_at    DateTime
+  team_type     String?         @default("human")
+  max_channels  Int?            @default(1)
   team_inboxes  team_inboxes[]
   team_managers team_managers[]
   team_users    team_users[]

@@ -73,12 +73,13 @@ export class PredictiveEngine {
             let maxChannels = 60;
             let pbxContext = vitalpbxConfig.context;
             let pbxTrunk = null;
+            let predictiveTrunk = null;
             let useVoskAmd = true;
             try {
                 const dbSettings = await prisma.settings.findMany({
                     where: {
                         key: {
-                            in: ['dialer_aggressiveness', 'dialer_max_channels', 'vitalpbx_context', 'vitalpbx_trunk', 'dialer_use_vosk_amd']
+                            in: ['dialer_aggressiveness', 'dialer_max_channels', 'vitalpbx_context', 'vitalpbx_trunk', 'dialer_predictive_trunk', 'dialer_use_vosk_amd']
                         }
                     }
                 });
@@ -91,6 +92,8 @@ export class PredictiveEngine {
                         pbxContext = s.value;
                     } else if (s.key === 'vitalpbx_trunk' && s.value) {
                         pbxTrunk = s.value;
+                    } else if (s.key === 'dialer_predictive_trunk' && s.value) {
+                        predictiveTrunk = s.value;
                     } else if (s.key === 'dialer_use_vosk_amd') {
                         useVoskAmd = s.value !== 'false';
                     }
@@ -135,7 +138,7 @@ export class PredictiveEngine {
 
             if (disparos > 0) {
                 console.log(`[PredictiveEngine] Tick - Triggering ${disparos} paced disparos (Target: ${targetCalls}, Recent: ${recentDialsCount}).`);
-                await this.triggerDialing(disparos, pbxContext, pbxTrunk, useVoskAmd);
+                await this.triggerDialing(disparos, pbxContext, predictiveTrunk || pbxTrunk, useVoskAmd);
             }
         } catch (error) {
             console.error('[PredictiveEngine] Error in tick:', error);
@@ -258,6 +261,40 @@ export class PredictiveEngine {
 
             const lead = JSON.parse(leadStr);
 
+            // Check if there is at least one idle agent for this lead's campaign
+            let hasIdleAgent = false;
+            try {
+                const campaign = await prisma.campaign.findUnique({
+                    where: { id: lead.campaignId },
+                    select: { teamId: true }
+                });
+                if (campaign && campaign.teamId) {
+                    const campaignTeams = campaign.teamId.split(',').map(t => t.trim()).filter(t => t);
+                    const idleAgents = await redisClient.zrange('dialer:idle_agents', 0, -1);
+                    if (idleAgents.length > 0) {
+                        const teamUsers = await prisma.team_users.findMany({
+                            where: { 
+                                user_id: { in: idleAgents },
+                                team_id: { in: campaignTeams }
+                            },
+                            select: { user_id: true }
+                        });
+                        if (teamUsers.length > 0) {
+                            hasIdleAgent = true;
+                        }
+                    }
+                }
+            } catch (err) {
+                console.error(`[PredictiveEngine] Error checking agent availability for lead ${lead.id}:`, err.message);
+                hasIdleAgent = true; // Fallback to avoid skipping if DB error
+            }
+
+            if (!hasIdleAgent) {
+                console.log(`[PredictiveEngine] Skipping lead ${lead.id} because campaign ${lead.campaignId} has no idle agents.`);
+                await redisClient.srem('dialer:dialed_leads', String(lead.id));
+                continue;
+            }
+
             try {
                 // Determine prefix and clean phone
                 let prefix = '';
@@ -362,18 +399,38 @@ export class PredictiveEngine {
     async refillLeadQueue() {
         console.log('[PredictiveEngine] Refilling lead queue from Postgres...');
         try {
-            // Find active predictive campaigns
-            const activeCampaigns = await prisma.campaign.findMany({
-                where: { dialingMode: 'predictive' },
-                select: { id: true }
-            });
-
-            if (activeCampaigns.length === 0) {
-                console.log('[PredictiveEngine] No active predictive campaigns found.');
+            // 1. Get all idle agent IDs from Redis
+            const idleAgents = await redisClient.zrange('dialer:idle_agents', 0, -1);
+            if (idleAgents.length === 0) {
+                console.log('[PredictiveEngine] No idle agents available. Skipping refill.');
                 return;
             }
 
-            const activeCampaignIds = activeCampaigns.map(c => c.id);
+            // 2. Fetch the teams of these idle agents
+            const teamUsers = await prisma.team_users.findMany({
+                where: { user_id: { in: idleAgents } },
+                select: { team_id: true }
+            });
+            const idleTeamIds = [...new Set(teamUsers.map(tu => tu.team_id))];
+
+            // 3. Find active predictive campaigns
+            const activeCampaigns = await prisma.campaign.findMany({
+                where: { dialingMode: 'predictive' }
+            });
+
+            // 4. Filter campaigns to only those that have at least one idle agent in their team
+            const activeCampaignIds = activeCampaigns
+                .filter(c => {
+                    if (!c.teamId) return false;
+                    const cTeams = c.teamId.split(',').map(t => t.trim());
+                    return cTeams.some(t => idleTeamIds.includes(t));
+                })
+                .map(c => c.id);
+
+            if (activeCampaignIds.length === 0) {
+                console.log('[PredictiveEngine] No active predictive campaigns with idle agents found.');
+                return;
+            }
 
             // Fetch already dialed leads from Redis
             const dialedLeads = await redisClient.smembers('dialer:dialed_leads');
@@ -495,21 +552,130 @@ export class PredictiveEngine {
                 const { Channel, ChannelId, Phone, LeadId, CampaignId } = event;
                 const channelName = Channel || ChannelId || event.Channelid;
                 const cleanPhone = await cleanPhonePrefix(Phone);
-                console.log(`[PredictiveEngine] AMI UserEvent PredictiveHuman received. Channel: ${channelName}, Phone: ${cleanPhone}, Lead: ${LeadId}`);
+                console.log(`[PredictiveEngine] AMI UserEvent PredictiveHuman received. Channel: ${channelName}, Phone: ${cleanPhone}, Lead: ${LeadId}, Campaign: ${CampaignId}`);
                 
                 try {
-                    // Try to pop an available agent
-                    const popped = await redisClient.zpopmin('dialer:idle_agents', 1);
-                    let agentId = null;
-                    if (popped && popped.length > 0) {
-                        agentId = popped[0];
+                    // Resolve campaign team users
+                    let allowedAgentIds = null;
+                    let isAiAgentTeam = false;
+                    let aiUsersList = [];
+                    if (CampaignId) {
+                        try {
+                            const campaign = await prisma.campaign.findUnique({
+                                where: { id: parseInt(CampaignId) },
+                                select: { teamId: true }
+                            });
+                            if (campaign && campaign.teamId) {
+                                const teamIds = campaign.teamId.split(',').map(id => id.trim()).filter(id => id);
+                                if (teamIds.length > 0) {
+                                    // Check if any of these teams is an AI agent team
+                                    const teams = await prisma.teams.findMany({
+                                        where: { id: { in: teamIds } }
+                                    });
+                                    const hasAiTeam = teams.some(t => t.team_type === 'ai_agent');
+                                    
+                                    if (hasAiTeam) {
+                                        isAiAgentTeam = true;
+                                        // Fetch active AI agents belonging to these teams
+                                        aiUsersList = await prisma.users.findMany({
+                                            where: {
+                                                team_users: { some: { team_id: { in: teamIds } } },
+                                                role: 'ai_agent',
+                                                is_active: true
+                                            }
+                                        });
+                                    } else {
+                                        const teamUsers = await prisma.team_users.findMany({
+                                            where: { team_id: { in: teamIds } },
+                                            select: { user_id: true }
+                                        });
+                                        allowedAgentIds = new Set(teamUsers.map(tu => tu.user_id));
+                                        console.log(`[PredictiveEngine] Campaign ${CampaignId} requires agents from teams [${teamIds.join(', ')}] (${allowedAgentIds.size} agents).`);
+                                    }
+                                }
+                            }
+                        } catch (dbErr) {
+                            console.error(`[PredictiveEngine] Error resolving campaign team users for Campaign ${CampaignId}:`, dbErr.message);
+                        }
                     }
- 
+
+                    // Try to pop an available agent from the campaign's team
+                    const idleAgents = await redisClient.zrange('dialer:idle_agents', 0, -1);
+                    let agentId = null;
+                    let agentObj = null;
+
+                    if (isAiAgentTeam && aiUsersList.length > 0) {
+                        // For AI teams, we assign to the first active AI agent in the list
+                        agentObj = aiUsersList[0];
+                        agentId = agentObj.id;
+                        console.log(`[PredictiveEngine] Answered call for AI Campaign ${CampaignId}. Routing to AI Agent ${agentObj.name} (${agentId})`);
+                    } else if (allowedAgentIds) {
+                        for (const id of idleAgents) {
+                            if (allowedAgentIds.has(id)) {
+                                // Try to remove this agent from idle list atomically
+                                const removed = await redisClient.zrem('dialer:idle_agents', id);
+                                if (removed === 1) {
+                                    agentId = id;
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        // Fallback: pop the absolute longest idle agent
+                        const popped = await redisClient.zpopmin('dialer:idle_agents', 1);
+                        if (popped && popped.length > 0) {
+                            agentId = popped[0];
+                        }
+                    }
+
                     if (!agentId) {
+                        // Check if return extension is configured
+                        let returnExt = null;
+                        let pbxContext = 'cos-all';
+                        try {
+                            const dbSettings = await prisma.settings.findMany({
+                                where: {
+                                    key: { in: ['dialer_return_extension', 'vitalpbx_context'] }
+                                }
+                            });
+                            for (const s of dbSettings) {
+                                if (s.key === 'dialer_return_extension') {
+                                    returnExt = s.value;
+                                } else if (s.key === 'vitalpbx_context' && s.value) {
+                                    pbxContext = s.value;
+                                }
+                            }
+                        } catch (dbErr) {
+                            console.error('[PredictiveEngine] Error fetching return extension settings:', dbErr.message);
+                        }
+
+                        if (returnExt && returnExt.trim() !== '') {
+                            console.log(`[PredictiveEngine] No agents available for answered call on channel ${channelName}. Redirecting to return extension: ${returnExt}`);
+                            amiService.redirectCall(channelName, pbxContext, returnExt, 1);
+
+                            // Save call in call_history as "Retorno"
+                            const contact = await getOrCreateContact(cleanPhone, LeadId);
+                            const systemUser = await getOrCreateSystemUser();
+                            await prisma.call_history.create({
+                                data: {
+                                    cliente_id: contact.id,
+                                    agente_id: systemUser.id,
+                                    status: 'Retorno',
+                                    duracao: 0,
+                                    data_inicio: new Date()
+                                }
+                            });
+
+                            // Clean up dialing tracking in Redis
+                            await redisClient.srem('dialer:active_dialing_channels', LeadId);
+                            await redisClient.del(`dialer:dialing_calls:${LeadId}`);
+                            return;
+                        }
+
                         console.warn(`[PredictiveEngine] No agents available for answered call on channel ${channelName}. Hanging up.`);
                         // Hang up the call
                         amiService.hangupCall(channelName);
- 
+
                         // Save call in call_history as "Abandono"
                         const contact = await getOrCreateContact(cleanPhone, LeadId);
                         const systemUser = await getOrCreateSystemUser();
@@ -528,27 +694,33 @@ export class PredictiveEngine {
                         const abKey = `dialer:stats:${todayStr}:abandoned`;
                         await redisClient.incr(abKey);
                         await redisClient.expire(abKey, 86400);
- 
+
                         // Clean up dialing tracking in Redis
                         await redisClient.srem('dialer:active_dialing_channels', LeadId);
                         await redisClient.del(`dialer:dialing_calls:${LeadId}`);
- 
+
                         // Inflate success rate in Redis temporarily to freeze dialer
                         await redisClient.set('dialer:inflated_success_rate', '1.0', 'EX', 30);
                         return;
                     }
- 
+
                     // --- CONNECTING CALL TO AGENT ---
                     console.log(`[PredictiveEngine] Assigning call on channel ${channelName} to Agent ${agentId}`);
                     
-                    // 1. Update agent status in Postgres to ocupado
-                    const agent = await prisma.users.update({
-                        where: { id: agentId },
-                        data: {
-                            agent_status: 'ocupado',
-                            agent_status_reason: 'In Call'
-                        }
-                    });
+                    if (!agentObj) {
+                        agentObj = await prisma.users.findUnique({ where: { id: agentId } });
+                    }
+
+                    // 1. Update agent status in Postgres to ocupado (only for humans)
+                    if (agentObj.role !== 'ai_agent') {
+                        await prisma.users.update({
+                            where: { id: agentId },
+                            data: {
+                                agent_status: 'ocupado',
+                                agent_status_reason: 'In Call'
+                            }
+                        });
+                    }
  
                     // 2. Get or create Contact
                     const contact = await getOrCreateContact(cleanPhone, LeadId);
@@ -584,7 +756,9 @@ export class PredictiveEngine {
                     if (uniqueId) {
                         await redisClient.set(`dialer:predictive_call_agent:${uniqueId}`, agentId, 'EX', 7200);
                     }
-                    await redisClient.set(`dialer:active_call_channel:${agentId}`, channelName, 'EX', 7200);
+                    if (agentObj.role !== 'ai_agent') {
+                        await redisClient.set(`dialer:active_call_channel:${agentId}`, channelName, 'EX', 7200);
+                    }
  
                     // 5. Emit agent.incoming_call event via active WebSocket to pop CRM data
                     const agentSocket = activeSockets.get(agentId);
@@ -600,7 +774,7 @@ export class PredictiveEngine {
                                 phone: cleanPhone
                             }
                         }));
-                    } else if (agent.role === 'ai_agent') {
+                    } else if (agentObj.role === 'ai_agent') {
                         console.log(`[PredictiveEngine] Publishing incoming call for AI Agent ${agentId} to Redis PubSub.`);
                         await redisClient.publish('omniagent:incoming_call', JSON.stringify({
                             agent_id: agentId,
@@ -611,9 +785,63 @@ export class PredictiveEngine {
                         }));
                     }
  
-                    // 6. Redirect the customer's channel to the agent's room in Asterisk dialplan
-                    amiService.setVariable(channelName, 'AGENT_ROOM', roomName);
-                    amiService.redirectCall(channelName, 'cos-all-custom', '9999', 1);
+                    // Check if AI Agent uses ElevenLabs and direct SIP is enabled
+                    let isElevenLabsDirect = false;
+                    let elevenlabsAgentId = null;
+                    if (agentObj.role === 'ai_agent') {
+                        try {
+                            const aiConfig = await prisma.$queryRaw`
+                                SELECT llm_provider, elevenlabs_agent_id 
+                                FROM user_ai_configs 
+                                WHERE user_id = ${agentId}
+                            `;
+                            if (aiConfig && aiConfig.length > 0 && aiConfig[0].llm_provider === 'elevenlabs') {
+                                elevenlabsAgentId = aiConfig[0].elevenlabs_agent_id;
+                                if (process.env.USE_ELEVENLABS_SIP_OUTBOUND === 'true' && elevenlabsAgentId) {
+                                    isElevenLabsDirect = true;
+                                }
+                            }
+                        } catch (dbErr) {
+                            console.error(`[PredictiveEngine] Error fetching AI config for agent ${agentId}:`, dbErr.message);
+                        }
+                    }
+
+                    if (isElevenLabsDirect && elevenlabsAgentId) {
+                        console.log(`[PredictiveEngine] Routing call to ElevenLabs SIP Trunk directly for agent ${agentId} (Agent ID: ${elevenlabsAgentId})`);
+                        amiService.setVariable(channelName, 'ELEVENLABS_AGENT_ID', elevenlabsAgentId);
+                        amiService.redirectCall(channelName, 'cos-all-custom', '9998', 1);
+                    } else {
+                        // 6. Redirect the customer's channel to the agent's room in Asterisk dialplan
+                        amiService.setVariable(channelName, 'AGENT_ROOM', roomName);
+                        amiService.redirectCall(channelName, 'cos-all-custom', '9999', 1);
+                    }
+
+                    // Check if AI Agent has remaining capacity and return to idle list immediately
+                    if (agentObj.role === 'ai_agent') {
+                        const activeCallsCount = await prisma.calls.count({
+                            where: { agent_id: agentId, status: 'active' }
+                        });
+                        
+                        const teamUsers = await prisma.team_users.findMany({
+                            where: { user_id: agentId },
+                            select: { team_id: true }
+                        });
+                        const teamIds = teamUsers.map(tu => tu.team_id);
+                        const teams = await prisma.teams.findMany({
+                            where: { id: { in: teamIds } }
+                        });
+                        let maxCapacity = 1;
+                        for (const t of teams) {
+                            if (t.team_type === 'ai_agent') {
+                                maxCapacity = Math.max(maxCapacity, t.max_channels || 1);
+                            }
+                        }
+                        
+                        if (activeCallsCount < maxCapacity) {
+                            await redisClient.zadd('dialer:idle_agents', Date.now(), agentId);
+                            console.log(`[PredictiveEngine] AI Agent ${agentObj.name} (${agentId}) has remaining capacity (${activeCallsCount}/${maxCapacity}). Immediately returned to idle ZSET.`);
+                        }
+                    }
 
                     // 7. Save call in call_history as "Atendida"
                     await prisma.call_history.create({
@@ -667,27 +895,43 @@ export class PredictiveEngine {
             for (const agent of aiAgents) {
                 const agentId = agent.id;
                 
-                // If the agent is set to 'disponivel' in DB
-                if (agent.agent_status === 'disponivel') {
-                    // Check if they have an active call in Redis
-                    const hasActiveCall = await redisClient.get(`dialer:active_call_channel:${agentId}`);
-                    if (hasActiveCall) {
-                        // If they are in a call, make sure they are not in the idle list
-                        await redisClient.zrem('dialer:idle_agents', agentId);
-                        continue;
+                // Fetch the teams of this agent
+                const teamUsers = await prisma.team_users.findMany({
+                    where: { user_id: agentId },
+                    select: { team_id: true }
+                });
+                const teamIds = teamUsers.map(tu => tu.team_id);
+                
+                // Fetch teams details to get max_channels
+                const teams = await prisma.teams.findMany({
+                    where: { id: { in: teamIds } }
+                });
+                
+                let maxCapacity = 1;
+                for (const t of teams) {
+                    if (t.team_type === 'ai_agent') {
+                        maxCapacity = Math.max(maxCapacity, t.max_channels || 1);
                     }
-                    
-                    // Check if already in idle list
+                }
+                
+                // Count current active calls for this AI agent
+                const activeCallsCount = await prisma.calls.count({
+                    where: { agent_id: agentId, status: 'active' }
+                });
+                
+                // If agent is available and below capacity
+                if (agent.agent_status === 'disponivel' && activeCallsCount < maxCapacity) {
+                    // Make sure they are in the idle list
                     const score = await redisClient.zscore('dialer:idle_agents', agentId);
                     if (score === null) {
-                        console.log(`[PredictiveEngine] Adding AI Agent ${agent.name} (${agentId}) to idle queue.`);
+                        console.log(`[PredictiveEngine] Adding AI Agent ${agent.name} (${agentId}) to idle queue. Capacity: ${activeCallsCount}/${maxCapacity}`);
                         await redisClient.zadd('dialer:idle_agents', Date.now(), agentId);
                     }
                 } else {
-                    // If status is not 'disponivel', remove from idle queue
+                    // Remove from idle list if status not 'disponivel' or reached capacity
                     const score = await redisClient.zscore('dialer:idle_agents', agentId);
                     if (score !== null) {
-                        console.log(`[PredictiveEngine] Removing AI Agent ${agent.name} (${agentId}) from idle queue (status: ${agent.agent_status}).`);
+                        console.log(`[PredictiveEngine] Removing AI Agent ${agent.name} (${agentId}) from idle queue (Status: ${agent.agent_status}, Capacity: ${activeCallsCount}/${maxCapacity}).`);
                         await redisClient.zrem('dialer:idle_agents', agentId);
                     }
                 }

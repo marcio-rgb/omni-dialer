@@ -208,6 +208,40 @@ export class VitalPBXService {
     }
 
     /**
+     * Transfers an active call to a specific Asterisk extension on VitalPBX.
+     * @param {string} channelId PBX channel ID
+     * @param {string} extension Destination extension (e.g. queue number or extension number)
+     * @param {string} context Destination context (optional)
+     */
+    static async transferCallToExtension(channelId, extension, context = null) {
+        console.log(`[VitalPBXService] Transferring channel ${channelId} to extension ${extension}`);
+
+        if (process.env.NODE_ENV === 'test' || process.env.NODE_ENV === 'development') {
+            console.log(`[VitalPBXService] [MOCK] Channel ${channelId} successfully transferred to extension ${extension}`);
+            return { status: 'success', message: 'Mock transfer to extension success' };
+        }
+
+        const config = await this.getPBXConfig();
+        const destContext = context || config.context;
+
+        try {
+            const response = await axios.post(`${config.apiUrl}/channels/${channelId}/transfer`, {
+                destination: extension,
+                context: destContext
+            }, {
+                headers: {
+                    'app-key': config.apiKey,
+                    'Content-Type': 'application/json'
+                }
+            });
+            return response.data;
+        } catch (error) {
+            console.error(`[VitalPBXService] Error transferring channel ${channelId} to extension ${extension}:`, error.message);
+            throw error;
+        }
+    }
+
+    /**
      * Hangs up/terminates a call.
      * @param {string} channelId Active call channel ID
      */
