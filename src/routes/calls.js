@@ -569,11 +569,32 @@ export default async function callRoutes(fastify, opts) {
 
             // If AI Agent call, do ConfBridge dial flow
             if (aiAgentId) {
-                console.log(`[ManualWebRTC] ConfBridge routing for AI Agent: ${aiAgentId} to phone: ${dialedPhone} in room: ${roomName}`);
+                // Check if the AI Agent uses iaVoiceSip (has role === 'ai_agent' and configured numero_externo)
+                let isIaVoiceSip = false;
+                let numeroExterno = null;
+                try {
+                    const aiAgent = await prisma.users.findUnique({
+                        where: { id: aiAgentId },
+                        select: { role: true, numero_externo: true }
+                    });
+                    if (aiAgent && aiAgent.role === 'ai_agent' && aiAgent.numero_externo) {
+                        numeroExterno = aiAgent.numero_externo;
+                        isIaVoiceSip = true;
+                    }
+                } catch (dbErr) {
+                    console.error(`[ManualWebRTC] Error checking AI config for AI Agent ${aiAgentId}:`, dbErr.message);
+                }
+
+                // Generate a unique room name for AI agent call to prevent overlap in concurrent calls
+                const uniqueRoomName = isIaVoiceSip
+                    ? `sala_agente_${aiAgentId}_${dialedPhone}`
+                    : roomName;
+
+                console.log(`[ManualWebRTC] ConfBridge routing for AI Agent: ${aiAgentId} to phone: ${dialedPhone} in room: ${uniqueRoomName}`);
                 
                 // Track manual call info in Redis for OriginateResponse mapping
                 await redisClient.set(`dialer:manual_call_info:${agentId}`, JSON.stringify({
-                    roomName,
+                    roomName: uniqueRoomName,
                     phone: dialedPhone
                 }), 'EX', 600);
 
@@ -586,14 +607,14 @@ export default async function callRoutes(fastify, opts) {
                 // Check if we are in local development
                 const sipHost = process.env.LIVEKIT_SIP_HOST || 'livekit-sip:5060';
                 const sipTrunk = process.env.LIVEKIT_SIP_TRUNK || 'anonymous';
-                let destData = `PJSIP/${sipTrunk}/sip:${roomName}@${sipHost}`;
+                let destData = `PJSIP/${sipTrunk}/sip:${uniqueRoomName}@${sipHost}`;
                 const lkUrl = process.env.LIVEKIT_URL || '';
                 if (lkUrl.includes('localhost') || lkUrl.includes('127.0.0.1') || lkUrl.includes('omnichat_livekit')) {
                     try {
                         const ipRes = await fetch('https://api.ipify.org');
                         if (ipRes.ok) {
                             const publicIp = (await ipRes.text()).trim();
-                            destData = `PJSIP/${sipTrunk}/sip:${roomName}@${publicIp}:5065`;
+                            destData = `PJSIP/${sipTrunk}/sip:${uniqueRoomName}@${publicIp}:5065`;
                             console.log(`[ManualWebRTC] Local development detected. Dialing via public IP: ${destData}`);
                         }
                     } catch (ipErr) {
@@ -601,31 +622,74 @@ export default async function callRoutes(fastify, opts) {
                     }
                 }
 
-                // Dial customer and route to ConfBridge
-                amiService.originateCall(
-                    `Local/dial_out${dialedPhone}@ami-dinamico/n`, // Channel
-                    'ami-dinamico',                                // Context
-                    dialedPhone,                                   // Extension
-                    1,                                             // Priority
-                    {
-                        AGENT_ID: String(agentId),
-                        PHONE: dialedPhone
-                    },
-                    `conf_customer_${agentId}_${Date.now()}`       // ActionID (matches conf_customer_)
-                );
+                if (isIaVoiceSip && numeroExterno) {
+                    console.log(`[ManualWebRTC] ConfBridge routing for iaVoiceSip AI Agent: ${aiAgentId} (Extension: ${numeroExterno})`);
 
-                // Dial LiveKit SIP and route to same ConfBridge
-                amiService.originateCall(
-                    destData,                                      // Channel
-                    'ami-dinamico',                                // Context
-                    dialedPhone,                                   // Extension
-                    1,                                             // Priority
-                    {
-                        AGENT_ID: String(agentId),
-                        PHONE: dialedPhone
-                    },
-                    `conf_livekit_${agentId}_${Date.now()}`        // ActionID (ignored, but starts with conf_livekit_)
-                );
+                    // 1. Dial customer and route to ConfBridge
+                    amiService.originateCall(
+                        `Local/dial_out${dialedPhone}@ami-dinamico/n`, // Channel
+                        'ami-dinamico',                                // Context
+                        dialedPhone,                                   // Extension
+                        1,                                             // Priority
+                        {
+                            AGENT_ID: String(agentId),
+                            PHONE: dialedPhone
+                        },
+                        `conf_customer_${agentId}_${Date.now()}`
+                    );
+
+                    // 2. Dial AI SIP Trunk using the dynamic extension from users.numero_externo
+                    amiService.originateCall(
+                        `Local/${numeroExterno}@cos-all-custom`,       // Channel
+                        'ami-dinamico',                                // Context
+                        dialedPhone,                                   // Extension
+                        1,                                             // Priority
+                        {
+                            PHONE: dialedPhone
+                        },
+                        `conf_ai_${agentId}_${Date.now()}`
+                    );
+
+                    // 3. Dial LiveKit SIP and route to same ConfBridge
+                    amiService.originateCall(
+                        destData,                                      // Channel
+                        'ami-dinamico',                                // Context
+                        dialedPhone,                                   // Extension
+                        1,                                             // Priority
+                        {
+                            AGENT_ID: String(agentId),
+                            PHONE: dialedPhone
+                        },
+                        `conf_livekit_${agentId}_${Date.now()}`
+                    );
+                } else {
+                    // Standard Gemini / LiveKit ConfBridge flow (original)
+                    // Dial customer and route to ConfBridge
+                    amiService.originateCall(
+                        `Local/dial_out${dialedPhone}@ami-dinamico/n`,
+                        'ami-dinamico',
+                        dialedPhone,
+                        1,
+                        {
+                            AGENT_ID: String(agentId),
+                            PHONE: dialedPhone
+                        },
+                        `conf_customer_${agentId}_${Date.now()}`
+                    );
+
+                    // Dial LiveKit SIP and route to same ConfBridge (Human/Standard routing to destData)
+                    amiService.originateCall(
+                        destData,
+                        'ami-dinamico',
+                        dialedPhone,
+                        1,
+                        {
+                            AGENT_ID: String(agentId),
+                            PHONE: dialedPhone
+                        },
+                        `conf_livekit_${agentId}_${Date.now()}`
+                    );
+                }
 
                 return { success: true, mode: 'confbridge' };
             }

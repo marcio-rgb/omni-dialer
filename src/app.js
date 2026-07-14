@@ -9,6 +9,7 @@ import redisClient from './config/redis.js';
 // Import router plugin & services
 import callsRouter from './routes/calls.js';
 import { PredictiveEngine } from './services/PredictiveEngine.js';
+import { AiPredictiveEngine } from './services/AiPredictiveEngine.js';
 
 import fastifyCors from '@fastify/cors';
 
@@ -88,6 +89,7 @@ fastify.get('/health', async (request, reply) => {
 
 // Instantiate the Predictive Engine
 const predictiveEngine = new PredictiveEngine();
+const aiPredictiveEngine = new AiPredictiveEngine();
 
 // Startup sequence
 const start = async () => {
@@ -98,6 +100,7 @@ const start = async () => {
 
         // Start predictive engine background loop
         predictiveEngine.start();
+        aiPredictiveEngine.start();
     } catch (err) {
         fastify.log.error(err);
         process.exit(1);
@@ -110,6 +113,7 @@ const shutdown = async (signal) => {
     
     // Stop predictive loop
     predictiveEngine.stop();
+    aiPredictiveEngine.stop();
 
     try {
         // Close Fastify server
