@@ -138,10 +138,14 @@ export class AiPredictiveEngine {
         // Check queue length
         let queueLength = await redisClient.llen('dialer:ai_lead_queue');
 
-        // If queue is low, refill it from Postgres
+        // If queue is low, refill it from Postgres (throttled to once every 10 seconds to avoid database and log flooding)
+        const now = Date.now();
         if (queueLength < disparos) {
-            await this.refillLeadQueue();
-            queueLength = await redisClient.llen('dialer:ai_lead_queue');
+            if (!this.lastRefillTime || now - this.lastRefillTime >= 10000) {
+                this.lastRefillTime = now;
+                await this.refillLeadQueue();
+                queueLength = await redisClient.llen('dialer:ai_lead_queue');
+            }
         }
 
         const countToPop = Math.min(disparos, queueLength);

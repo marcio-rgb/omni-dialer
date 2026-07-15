@@ -262,10 +262,14 @@ export class PredictiveEngine {
         // Check queue length
         let queueLength = await redisClient.llen('dialer:lead_queue');
         
-        // If queue is low, refill it from Postgres
+        // If queue is low, refill it from Postgres (throttled to once every 10 seconds to avoid database and log flooding)
+        const now = Date.now();
         if (queueLength < disparos) {
-            await this.refillLeadQueue();
-            queueLength = await redisClient.llen('dialer:lead_queue');
+            if (!this.lastRefillTime || now - this.lastRefillTime >= 10000) {
+                this.lastRefillTime = now;
+                await this.refillLeadQueue();
+                queueLength = await redisClient.llen('dialer:lead_queue');
+            }
         }
 
         const countToPop = Math.min(disparos, queueLength);
@@ -409,18 +413,32 @@ export class PredictiveEngine {
         }
     }
 
-    /**
-     * Refills the Redis lead queue with undialed leads from active campaigns in Postgres.
-     */
     async refillLeadQueue() {
-        console.log('[PredictiveEngine] Refilling lead queue from Postgres...');
         try {
-            // 1. Get all idle agent IDs from Redis
-            const idleAgents = await redisClient.zrange('dialer:idle_agents', 0, -1);
+            // 1. Get all active AI agent IDs if not cached
+            if (!this.aiAgentIds) {
+                const users = await prisma.users.findMany({
+                    select: { id: true, role: true }
+                });
+                this.aiAgentIds = new Set(users.filter(u => u.role === 'ai_agent').map(u => String(u.id)));
+            }
+
+            // Get all idle agent IDs from Redis who are active (SIP for AI, WebRTC active for human)
+            const rawIdleAgents = await redisClient.zrange('dialer:idle_agents', 0, -1);
+            const idleAgents = [];
+            for (const id of rawIdleAgents) {
+                const isAi = this.aiAgentIds.has(String(id));
+                const active = isAi ? 'true' : await redisClient.get(`dialer:agent_webrtc_active:${id}`);
+                if (active === 'true') {
+                    idleAgents.push(id);
+                }
+            }
+
             if (idleAgents.length === 0) {
-                console.log('[PredictiveEngine] No idle agents available. Skipping refill.');
+                console.log('[PredictiveEngine] No idle agents with active WebRTC/SIP connections. Skipping refill.');
                 return;
             }
+            console.log('[PredictiveEngine] Refilling lead queue from Postgres...');
 
             // 2. Fetch the teams of these idle agents
             const teamUsers = await prisma.team_users.findMany({
