@@ -6,12 +6,12 @@ export class LiveKitService {
      * Creates a room in LiveKit if it doesn't already exist.
      * @param {string} roomName
      */
-    static async createRoom(roomName) {
-        console.log(`[LiveKitService] Creating room: ${roomName}`);
+    static async createRoom(roomName, emptyTimeout = 300) {
+        console.log(`[LiveKitService] Creating room: ${roomName} with emptyTimeout: ${emptyTimeout}s`);
         try {
             await roomServiceClient.createRoom({
                 name: roomName,
-                emptyTimeout: 300 // 5 minutes
+                emptyTimeout: emptyTimeout
             });
             console.log(`[LiveKitService] Room ${roomName} created successfully.`);
         } catch (error) {

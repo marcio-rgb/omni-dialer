@@ -62,8 +62,21 @@ export class PredictiveEngine {
             const now = Date.now();
             const oneMinuteAgo = now - 60000;
 
-            // 1. Get Available Agents count from Redis ZSET
-            const availableAgents = await redisClient.zcard('dialer:idle_agents');
+            // 1. Fetch AI agent IDs to distinguish them from WebRTC human agents
+            const users = await prisma.users.findMany({
+                select: { id: true, role: true }
+            });
+            this.aiAgentIds = new Set(users.filter(u => u.role === 'ai_agent').map(u => String(u.id)));
+
+            const idleAgents = await redisClient.zrange('dialer:idle_agents', 0, -1);
+            let availableAgents = 0;
+            for (const id of idleAgents) {
+                const isAi = this.aiAgentIds.has(String(id));
+                const active = isAi ? 'true' : await redisClient.get(`dialer:agent_webrtc_active:${id}`);
+                if (active === 'true') {
+                    availableAgents++;
+                }
+            }
 
             // 2. Calculate Success Rate (answered vs total in last X minutes)
             let successRate = await this.calculateSuccessRate();
@@ -575,6 +588,7 @@ export class PredictiveEngine {
                 try {
                     // Resolve campaign team users
                     let allowedAgentIds = null;
+                    let isAiCampaign = false;
                     if (CampaignId) {
                         try {
                             const campaign = await prisma.campaign.findUnique({
@@ -589,7 +603,14 @@ export class PredictiveEngine {
                                         select: { user_id: true }
                                     });
                                     allowedAgentIds = new Set(teamUsers.map(tu => tu.user_id));
-                                    console.log(`[PredictiveEngine] Campaign ${CampaignId} requires agents from teams [${teamIds.join(', ')}] (${allowedAgentIds.size} agents).`);
+                                    
+                                    // Check if this is an AI campaign
+                                    const teams = await prisma.teams.findMany({
+                                        where: { id: { in: teamIds } },
+                                        select: { team_type: true }
+                                    });
+                                    isAiCampaign = teams.some(t => t.team_type === 'ai_agent');
+                                    console.log(`[PredictiveEngine] Campaign ${CampaignId} (isAi: ${isAiCampaign}) requires agents from teams [${teamIds.join(', ')}] (${allowedAgentIds.size} agents).`);
                                 }
                             }
                         } catch (dbErr) {
@@ -597,7 +618,7 @@ export class PredictiveEngine {
                         }
                     }
 
-                    // Try to pop an available agent from the campaign's team
+                    // Try to pop an available agent from the campaign's team who is active (WebRTC for human, direct for AI)
                     const idleAgents = await redisClient.zrange('dialer:idle_agents', 0, -1);
                     let agentId = null;
                     let agentObj = null;
@@ -605,7 +626,23 @@ export class PredictiveEngine {
                     if (allowedAgentIds) {
                         for (const id of idleAgents) {
                             if (allowedAgentIds.has(id)) {
-                                // Try to remove this agent from idle list atomically
+                                const isAi = this.aiAgentIds && this.aiAgentIds.has(String(id));
+                                const webrtcActive = isAi ? 'true' : await redisClient.get(`dialer:agent_webrtc_active:${id}`);
+                                if (webrtcActive === 'true') {
+                                    const removed = await redisClient.zrem('dialer:idle_agents', id);
+                                    if (removed === 1) {
+                                        agentId = id;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Fallback: pop the absolute longest idle agent who is active
+                        for (const id of idleAgents) {
+                            const isAi = this.aiAgentIds && this.aiAgentIds.has(String(id));
+                            const webrtcActive = isAi ? 'true' : await redisClient.get(`dialer:agent_webrtc_active:${id}`);
+                            if (webrtcActive === 'true') {
                                 const removed = await redisClient.zrem('dialer:idle_agents', id);
                                 if (removed === 1) {
                                     agentId = id;
@@ -613,26 +650,21 @@ export class PredictiveEngine {
                                 }
                             }
                         }
-                    } else {
-                        // Fallback: pop the absolute longest idle agent
-                        const popped = await redisClient.zpopmin('dialer:idle_agents', 1);
-                        if (popped && popped.length > 0) {
-                            agentId = popped[0];
-                        }
                     }
 
                     if (!agentId) {
                         // Check if return extension is configured
                         let returnExt = null;
                         let pbxContext = 'cos-all';
+                        const returnKey = isAiCampaign ? 'dialer_ai_return_extension' : 'dialer_return_extension';
                         try {
                             const dbSettings = await prisma.settings.findMany({
                                 where: {
-                                    key: { in: ['dialer_return_extension', 'vitalpbx_context'] }
+                                    key: { in: [returnKey, 'vitalpbx_context'] }
                                 }
                             });
                             for (const s of dbSettings) {
-                                if (s.key === 'dialer_return_extension') {
+                                if (s.key === returnKey) {
                                     returnExt = s.value;
                                 } else if (s.key === 'vitalpbx_context' && s.value) {
                                     pbxContext = s.value;

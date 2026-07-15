@@ -10,7 +10,7 @@ export class AiPredictiveEngine {
         this.intervalId = null;
         this.cleanupIntervalId = null;
         this.intervalMs = parseInt(process.env.DIALER_INTERVAL_MS || '500');
-        
+
         // Listen to AMI events
         this.setupAmiListeners();
 
@@ -25,7 +25,7 @@ export class AiPredictiveEngine {
         if (this.running) return;
         this.running = true;
         console.log(`[AiPredictiveEngine] Starting AI predictive loop (Interval: ${this.intervalMs}ms)...`);
-        
+
         // Main loop
         this.intervalId = setInterval(() => this.tick(), this.intervalMs);
 
@@ -134,10 +134,10 @@ export class AiPredictiveEngine {
     async triggerDialing(disparos, pbxContext, pbxTrunk, useVoskAmd = true) {
         const resolvedPbxContext = pbxContext || 'triagem-amd-ia';
         const resolvedPbxTrunk = pbxTrunk && pbxTrunk.trim() !== '' ? pbxTrunk : '';
-        
+
         // Check queue length
         let queueLength = await redisClient.llen('dialer:ai_lead_queue');
-        
+
         // If queue is low, refill it from Postgres
         if (queueLength < disparos) {
             await this.refillLeadQueue();
@@ -186,7 +186,7 @@ export class AiPredictiveEngine {
                         destChannel = `PJSIP/${resolvedPbxTrunk}/${dialedPhone}`;
                     }
                 }
-                
+
                 const variables = {
                     LEAD_ID: String(lead.id),
                     CAMPAIGN_ID: String(lead.campaignId),
@@ -349,14 +349,14 @@ export class AiPredictiveEngine {
                 const elapsed = now - parseInt(callData.timestamp);
                 if (elapsed > 45000) {
                     console.log(`[AiPredictiveEngine] Lead ${leadId} timed out (${elapsed}ms). Cleaning up.`);
-                    
+
                     await redisClient.publish('dialer:events', JSON.stringify({
                         phone: callData.phone,
                         status: 'falha',
                         label: 'Falha',
                         operator: '',
                         time: '00:00'
-                    })).catch(() => {});
+                    })).catch(() => { });
 
                     try {
                         const contact = await getOrCreateContact(callData.phone, leadId);
@@ -393,7 +393,7 @@ export class AiPredictiveEngine {
                 const channelName = Channel || ChannelId || event.Channelid;
                 const cleanPhone = await cleanPhonePrefix(Phone);
                 console.log(`[AiPredictiveEngine] AMI UserEvent PredictiveAi received. Channel: ${channelName}, Phone: ${cleanPhone}, Lead: ${LeadId}, Campaign: ${CampaignId}`);
-                
+
                 try {
                     // Clean up dialing tracking in Redis immediately
                     await redisClient.srem('dialer:ai_active_dialing_channels', LeadId);
@@ -432,8 +432,7 @@ export class AiPredictiveEngine {
                     }
 
                     if (!agentId || !agentObj) {
-                        console.warn(`[AiPredictiveEngine] No AI agents available for answered AI call on channel ${channelName}. Checking AI return extension...`);
-                        
+                        // Check if return extension is configured for AI
                         let returnExt = null;
                         let pbxContext = 'cos-all';
                         try {
@@ -450,47 +449,31 @@ export class AiPredictiveEngine {
                                 }
                             }
                         } catch (dbErr) {
-                            console.error('[AiPredictiveEngine] Error fetching AI return extension settings:', dbErr.message);
+                            console.error('[AiPredictiveEngine] Error fetching return extension settings:', dbErr.message);
                         }
 
                         if (returnExt && returnExt.trim() !== '') {
-                            console.log(`[AiPredictiveEngine] Redirecting call on channel ${channelName} to AI return extension: ${returnExt}`);
+                            console.log(`[AiPredictiveEngine] No AI agents available for answered call on channel ${channelName}. Redirecting to return extension: ${returnExt}`);
                             amiService.redirectCall(channelName, pbxContext, returnExt, 1);
-                        } else {
-                            console.warn(`[AiPredictiveEngine] No AI return extension configured. Hanging up channel ${channelName}.`);
-                            amiService.hangupCall(channelName);
-                        }
-                        return;
-                    }
 
-                    const numeroExterno = agentObj.numero_externo;
-                    if (!numeroExterno || numeroExterno.trim() === '') {
-                        console.error(`[AiPredictiveEngine] AI Agent ${agentObj.name} does not have a configured extension (numero_externo). Checking AI return extension...`);
-                        
-                        let returnExt = null;
-                        let pbxContext = 'cos-all';
-                        try {
-                            const dbSettings = await prisma.settings.findMany({
-                                where: {
-                                    key: { in: ['dialer_ai_return_extension', 'vitalpbx_context'] }
+                            // Save call in call_history as "Retorno"
+                            const contact = await getOrCreateContact(cleanPhone, LeadId);
+                            const systemUser = await getOrCreateSystemUser();
+                            await prisma.call_history.create({
+                                data: {
+                                    cliente_id: contact.id,
+                                    operador_id: systemUser.id,
+                                    data_inicio: new Date(),
+                                    data_fim: new Date(),
+                                    duracao: 0,
+                                    status: 'abandon',
+                                    label: 'Retorno (Sem Agente IA)',
+                                    operator: 'Sistema (IA)',
+                                    time: '00:00'
                                 }
-                            });
-                            for (const s of dbSettings) {
-                                if (s.key === 'dialer_ai_return_extension') {
-                                    returnExt = s.value;
-                                } else if (s.key === 'vitalpbx_context' && s.value) {
-                                    pbxContext = s.value;
-                                }
-                            }
-                        } catch (dbErr) {
-                            console.error('[AiPredictiveEngine] Error fetching AI return extension settings:', dbErr.message);
-                        }
-
-                        if (returnExt && returnExt.trim() !== '') {
-                            console.log(`[AiPredictiveEngine] Redirecting call on channel ${channelName} to AI return extension: ${returnExt}`);
-                            amiService.redirectCall(channelName, pbxContext, returnExt, 1);
+                            }).catch(() => {});
                         } else {
-                            console.warn(`[AiPredictiveEngine] No AI return extension configured. Hanging up channel ${channelName}.`);
+                            console.warn(`[AiPredictiveEngine] No active AI agent configured/available for answered AI call on channel ${channelName} and no fallback return extension set. Hanging up.`);
                             amiService.hangupCall(channelName);
                         }
                         return;
@@ -498,7 +481,7 @@ export class AiPredictiveEngine {
 
                     // --- CONNECTING CALL TO AI AGENT VIA CONFBRIDGE ---
                     console.log(`[AiPredictiveEngine] Assigning AI call on channel ${channelName} to AI Agent ${agentId} (${agentObj.name})`);
-                    
+
                     // Get or create Contact
                     const contact = await getOrCreateContact(cleanPhone, LeadId);
 
@@ -508,7 +491,7 @@ export class AiPredictiveEngine {
                     // Create active call record in DB calls table
                     const callId = crypto.randomUUID();
                     const roomName = `sala_agente_${agentId}_${cleanPhone}`;
-                    
+
                     // Clean up any old call with the same room_name to prevent unique constraint violation
                     try {
                         await prisma.calls.deleteMany({
@@ -562,34 +545,18 @@ export class AiPredictiveEngine {
                         }
                     }
 
-                    console.log(`[AiPredictiveEngine] Routing call via ConfBridge for iaVoiceSip agent ${agentId} (Extension: ${numeroExterno}) to ${cleanPhone} (Room: ${roomName})`);
-                    
-                    // 1. Redirecionar o canal do cliente para o ConfBridge no contexto ami-dinamico com a extensão cleanPhone
-                    amiService.redirectCall(channelName, 'ami-dinamico', cleanPhone, 1);
-                    
-                    // 2. Originar chamada para a IA (recuperando de users.numero_externo) e conectar ao mesmo ConfBridge
-                    amiService.originateCall(
-                        `Local/${numeroExterno}@cos-all-custom`, // Canal de origem
-                        'ami-dinamico',                           // Contexto de destino
-                        cleanPhone,                               // Extensão de destino (ConfBridge)
-                        1,                                        // Prioridade
-                        {
-                            PHONE: cleanPhone
-                        },
-                        `conf_ai_${agentId}_${Date.now()}`
-                    );
+                    console.log(`[AiPredictiveEngine] Routing call directly to LiveKit SIP trunk (Extension 9999) for Agent ${agentId} to Room ${roomName}`);
 
-                    // 3. Originar chamada para o Trunk LiveKit (9999 / destData) e conectar ao mesmo ConfBridge
-                    amiService.originateCall(
-                        destData,                                     // Canal de origem
-                        'ami-dinamico',                               // Contexto de destino
-                        cleanPhone,                                   // Extensão de destino (ConfBridge)
-                        1,                                            // Prioridade
-                        {
-                            AGENT_ROOM: roomName
-                        },
-                        `conf_livekit_${agentId}_${Date.now()}`
-                    );
+                    // 1. Store mappings in Redis for handoff and fallback lookups
+                    await redisClient.set(`dialer:active_call_channel:${agentId}`, channelName, 'EX', 7200);
+                    await redisClient.set(`dialer:room_channel:${roomName}`, channelName, 'EX', 7200);
+                    await redisClient.set(`dialer:room_agent:${roomName}`, agentId, 'EX', 7200);
+
+                    // 2. Set AGENT_ROOM variable on customer channel
+                    amiService.setVariable(channelName, 'AGENT_ROOM', roomName);
+
+                    // 3. Redirect customer channel directly to extension 9999 (SIP LiveKit) in cos-all context
+                    amiService.redirectCall(channelName, 'cos-all', '9999', 1);
 
                     // 7. Save call in call_history as "Atendida"
                     await prisma.call_history.create({
