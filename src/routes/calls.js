@@ -652,35 +652,23 @@ export default async function callRoutes(fastify, opts) {
                         `manual_ai_${agentId}_${Date.now()}`
                     );
                 } else {
-                    // Standard Gemini / LiveKit ConfBridge flow (original)
-                    // Dial customer and route to ConfBridge
-                    amiService.originateCall(
-                        `Local/dial_out${dialedPhone}@ami-dinamico/n`,
-                        'ami-dinamico',
-                        dialedPhone,
-                        1,
+                    // Standard Human WebRTC direct routing (bypassing ConfBridge)
+                    console.log(`[ManualWebRTC] Direct LiveKit SIP routing for Human Agent: ${agentId} to phone: ${dialedPhone}`);
+                    
+                    amiService.originateCallApp(
+                        `Local/${dialedPhone}@cos-all/n`, // Channel (dials the customer)
+                        'Dial',                                       // Application
+                        destData,                                     // Application data (LiveKit SIP trunk)
                         {
                             AGENT_ID: String(agentId),
-                            PHONE: dialedPhone
+                            PHONE: dialedPhone,
+                            AGENT_ROOM: uniqueRoomName // which is roomName (call_conversationId_timestamp)
                         },
-                        `conf_customer_${agentId}_${Date.now()}`
-                    );
-
-                    // Dial LiveKit SIP and route to same ConfBridge (Human/Standard routing to destData)
-                    amiService.originateCall(
-                        destData,
-                        'ami-dinamico',
-                        dialedPhone,
-                        1,
-                        {
-                            AGENT_ID: String(agentId),
-                            PHONE: dialedPhone
-                        },
-                        `conf_livekit_${agentId}_${Date.now()}`
+                        `manual_human_${agentId}_${Date.now()}`
                     );
                 }
 
-                return { success: true, mode: 'confbridge' };
+                return { success: true, mode: 'livekit' };
             }
 
             // Check if AI Agent uses ElevenLabs and direct SIP is enabled
