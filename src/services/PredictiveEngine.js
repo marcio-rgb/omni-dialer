@@ -153,7 +153,6 @@ export class PredictiveEngine {
             }
 
             if (disparos > 0) {
-                console.log(`[PredictiveEngine] Tick - Triggering ${disparos} paced disparos (Target: ${targetCalls}, Recent: ${recentDialsCount}).`);
                 await this.triggerDialing(disparos, pbxContext, predictiveTrunk || pbxTrunk, useVoskAmd, dialerContext);
             }
         } catch (error) {
@@ -274,6 +273,8 @@ export class PredictiveEngine {
 
         const countToPop = Math.min(disparos, queueLength);
         if (countToPop <= 0) return;
+
+        console.log(`[PredictiveEngine] Originating ${countToPop} predictive calls (Queue size: ${queueLength})...`);
 
         for (let i = 0; i < countToPop; i++) {
             const leadStr = await redisClient.lpop('dialer:lead_queue');
