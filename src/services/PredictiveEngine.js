@@ -154,7 +154,7 @@ export class PredictiveEngine {
 
             if (disparos > 0) {
                 console.log(`[PredictiveEngine] Tick - Triggering ${disparos} paced disparos (Target: ${targetCalls}, Recent: ${recentDialsCount}).`);
-                await this.triggerDialing(disparos, pbxContext, predictiveTrunk || pbxTrunk, useVoskAmd);
+                await this.triggerDialing(disparos, pbxContext, predictiveTrunk || pbxTrunk, useVoskAmd, dialerContext);
             }
         } catch (error) {
             console.error('[PredictiveEngine] Error in tick:', error);
@@ -256,7 +256,7 @@ export class PredictiveEngine {
     /**
      * Core dialer execution. Pops leads and originates calls.
      */
-    async triggerDialing(disparos, pbxContext, pbxTrunk, useVoskAmd = true) {
+    async triggerDialing(disparos, pbxContext, pbxTrunk, useVoskAmd = true, dialerContext = 'triagem-amd') {
         const resolvedPbxContext = pbxContext || vitalpbxConfig.context || 'from-internal';
         const resolvedPbxTrunk = pbxTrunk && pbxTrunk.trim() !== '' ? pbxTrunk : '';
         // Check queue length
