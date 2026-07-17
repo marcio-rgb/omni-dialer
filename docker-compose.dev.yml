@@ -22,14 +22,15 @@ services:
       - REDIS_HOST=dialer_redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=""
-      - LIVEKIT_URL=http://172.18.0.1:7880
+      - LIVEKIT_URL=http://livekit:7880
       - LIVEKIT_API_KEY=devkey
-      - LIVEKIT_API_SECRET=devkeysecret32characterslongpass123
+      - LIVEKIT_API_SECRET=secret
       - VITALPBX_API_URL=http://192.168.1.100/api/v2
       - VITALPBX_API_KEY=api_key_here
       - VITALPBX_TRUNK=Local/sip:SHAMPATEL
       - VITALPBX_CONTEXT=cos-all
       - FORCE_RECREATE=1
+      - ELEVEN_API_KEY=${ELEVEN_API_KEY}
     command: sh -c "apt-get update -y && apt-get install -y openssl && mkdir -p node_modules && find node_modules -mindepth 1 -delete && npm install && npx prisma generate && npm start"
     ports:
       - "3001:3001"

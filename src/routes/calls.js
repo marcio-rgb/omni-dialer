@@ -76,7 +76,10 @@ export default async function callRoutes(fastify, opts) {
 
         if (isManual || isWebRTC) {
             const parts = actionId.split('_');
-            const agentId = parts[1];
+            let agentId = parts[1];
+            if (isManual) {
+                agentId = parts[2];
+            }
 
             if (event.Response === 'Failure') {
                 // 1. Reset agent status to "disponivel" in DB so they are not stuck
