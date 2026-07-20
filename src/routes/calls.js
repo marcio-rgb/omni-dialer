@@ -655,12 +655,12 @@ export default async function callRoutes(fastify, opts) {
                         `manual_ai_${agentId}_${Date.now()}`
                     );
                 } else {
-                    // Standard LiveKit SIP routing via 'ami-dinamico' extension 9999
+                    // Standard LiveKit SIP routing via 'cos-all-custom' extension 9999
                     console.log(`[ManualWebRTC] Routing customer to LiveKit room: ${uniqueRoomName} for AI Agent: ${aiAgentId} (Initiated by Agent: ${agentId})`);
                     
                     amiService.originateCall(
                         `Local/${dialedPhone}@cos-all/n`,             // Channel (dials the customer)
-                        'ami-dinamico',                               // Context
+                        'cos-all-custom',                             // Context
                         '9999',                                       // Exten
                         1,                                            // Priority
                         {
@@ -757,7 +757,7 @@ export default async function callRoutes(fastify, opts) {
 
             amiService.originateCall(
                 `Local/${dialedPhone}@cos-all/n`,             // Channel
-                'ami-dinamico',                               // Context
+                'cos-all-custom',                             // Context
                 '9999',                                       // Exten
                 1,                                            // Priority
                 {
@@ -811,9 +811,9 @@ export default async function callRoutes(fastify, opts) {
             const targetRoomName = `sala_agente_${agentId}`;
             amiService.setVariable(channelName, 'AGENT_ROOM', targetRoomName);
 
-            // 4. Redirect the channel back to extension 9999 (LiveKit SIP trunk) in context 'ami-dinamico'
+            // 4. Redirect the channel back to extension 9999 (LiveKit SIP trunk) in context 'cos-all-custom'
             // This will cause Asterisk to tear down the SIP call to the AI room and dial the human room.
-            amiService.redirectCall(channelName, 'ami-dinamico', '9999', 1);
+            amiService.redirectCall(channelName, 'cos-all-custom', '9999', 1);
 
             // 5. Update Redis mappings for the new agent
             await redisClient.set(`dialer:active_call_channel:${agentId}`, channelName, 'EX', 7200);
@@ -885,8 +885,8 @@ export default async function callRoutes(fastify, opts) {
             const targetRoomName = `sala_agente_${targetAgentId}`;
             amiService.setVariable(channelName, 'AGENT_ROOM', targetRoomName);
 
-            // 4. Redirect the channel back to extension 9999 in context 'ami-dinamico'
-            amiService.redirectCall(channelName, 'ami-dinamico', '9999', 1);
+            // 4. Redirect the channel back to extension 9999 in context 'cos-all-custom'
+            amiService.redirectCall(channelName, 'cos-all-custom', '9999', 1);
 
             // 5. Update Redis mappings
             await redisClient.set(`dialer:active_call_channel:${targetAgentId}`, channelName, 'EX', 7200);
