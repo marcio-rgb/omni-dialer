@@ -684,7 +684,14 @@ export default async function callRoutes(fastify, opts) {
                     WHERE user_id = ${agentId}
                 `;
                 if (aiConfig && aiConfig.length > 0 && aiConfig[0].llm_provider === 'elevenlabs') {
-                    elevenlabsAgentId = aiConfig[0].elevenlabs_agent_id;
+                    const rawAgentId = aiConfig[0].elevenlabs_agent_id;
+                    if (rawAgentId) {
+                        if (typeof rawAgentId === 'string') {
+                            elevenlabsAgentId = rawAgentId;
+                        } else if (typeof rawAgentId === 'object') {
+                            elevenlabsAgentId = rawAgentId.agent_idt;
+                        }
+                    }
                     if (process.env.USE_ELEVENLABS_SIP_OUTBOUND === 'true' && elevenlabsAgentId) {
                         isElevenLabsDirect = true;
                     }
