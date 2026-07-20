@@ -33,6 +33,8 @@ function getGitHubConfig() {
 // 2. Helper to load Portainer config from dialer/.env or chat/.env
 function getPortainerConfig() {
     const pathsToCheck = [
+        path.join(__dirname, '../ecosystem/.env'),
+        path.join(__dirname, '../ecosystem/.ENV'),
         path.join(__dirname, '.env'),
         path.join(__dirname, '../chat/.env')
     ];

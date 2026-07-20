@@ -655,17 +655,18 @@ export default async function callRoutes(fastify, opts) {
                         `manual_ai_${agentId}_${Date.now()}`
                     );
                 } else {
-                    // Standard Human WebRTC direct routing (bypassing ConfBridge)
-                    console.log(`[ManualWebRTC] Direct LiveKit SIP routing for Human Agent: ${agentId} to phone: ${dialedPhone}`);
+                    // Standard LiveKit SIP routing via 'ami-dinamico' extension 9999
+                    console.log(`[ManualWebRTC] Routing customer to LiveKit room: ${uniqueRoomName} for AI Agent: ${aiAgentId} (Initiated by Agent: ${agentId})`);
                     
-                    amiService.originateCallApp(
-                        `Local/${dialedPhone}@cos-all/n`, // Channel (dials the customer)
-                        'Dial',                                       // Application
-                        destData,                                     // Application data (LiveKit SIP trunk)
+                    amiService.originateCall(
+                        `Local/${dialedPhone}@cos-all/n`,             // Channel (dials the customer)
+                        'ami-dinamico',                               // Context
+                        '9999',                                       // Exten
+                        1,                                            // Priority
                         {
                             AGENT_ID: String(agentId),
                             PHONE: dialedPhone,
-                            AGENT_ROOM: uniqueRoomName // which is roomName (call_conversationId_timestamp)
+                            AGENT_ROOM: uniqueRoomName
                         },
                         `manual_human_${agentId}_${Date.now()}`
                     );
@@ -752,13 +753,17 @@ export default async function callRoutes(fastify, opts) {
                 }
             }
 
-            amiService.originateCallApp(
-                `Local/${dialedPhone}@cos-all/n`,
-                'Dial',
-                destData,
+            console.log(`[ManualWebRTC] Routing customer to LiveKit room: ${roomName} for Human Agent: ${agentId} via extension 9999`);
+
+            amiService.originateCall(
+                `Local/${dialedPhone}@cos-all/n`,             // Channel
+                'ami-dinamico',                               // Context
+                '9999',                                       // Exten
+                1,                                            // Priority
                 {
                     AGENT_ID: String(agentId),
-                    PHONE: dialedPhone
+                    PHONE: dialedPhone,
+                    AGENT_ROOM: roomName
                 },
                 `webrtc_${agentId}_${Date.now()}`
             );
