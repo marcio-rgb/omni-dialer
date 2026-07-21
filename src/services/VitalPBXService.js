@@ -76,8 +76,9 @@ export class VitalPBXService {
         }
 
         let dialedPhone = phone.replace(/\D/g, '');
-        if (prefix && !dialedPhone.startsWith(prefix)) {
-            dialedPhone = prefix + dialedPhone;
+        const cleanPrefix = prefix ? prefix.replace(/\D/g, '') : '';
+        if (cleanPrefix && !dialedPhone.startsWith(cleanPrefix)) {
+            dialedPhone = cleanPrefix + dialedPhone;
         }
 
         console.log(`[VitalPBXService] Originating call to ${dialedPhone} (Original: ${phone}, Lead: ${leadId}, Campaign: ${campaignId}, Channel: ${channelId})`);

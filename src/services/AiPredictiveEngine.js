@@ -3,6 +3,7 @@ import prisma from '../config/db.js';
 import redisClient from '../config/redis.js';
 import { getOrCreateContact, getOrCreateSystemUser, getOrCreateConversation, cleanPhonePrefix } from '../routes/calls.js';
 import { amiService } from './AMIService.js';
+import { channelManager } from './ChannelManager.js';
 
 export class AiPredictiveEngine {
     constructor() {
@@ -47,10 +48,69 @@ export class AiPredictiveEngine {
     /**
      * Single iteration of the AI predictive dialer.
      */
+    async isWithinOperatingHours() {
+        let startTime = '08:00';
+        let endTime = '20:00';
+        let activeDays = ['1', '2', '3', '4', '5', '6']; // 0=Sun, 1=Mon...6=Sat
+
+        try {
+            const dbSettings = await prisma.settings.findMany({
+                where: {
+                    key: { in: ['dialer_ai_start_time', 'dialer_ai_end_time', 'dialer_ai_active_days'] }
+                }
+            });
+            for (const s of dbSettings) {
+                if (s.key === 'dialer_ai_start_time' && s.value) startTime = s.value.trim();
+                else if (s.key === 'dialer_ai_end_time' && s.value) endTime = s.value.trim();
+                else if (s.key === 'dialer_ai_active_days' && s.value) {
+                    try {
+                        const parsed = JSON.parse(s.value);
+                        if (Array.isArray(parsed)) activeDays = parsed.map(String);
+                    } catch (e) {
+                        activeDays = s.value.split(',').map(d => d.trim());
+                    }
+                }
+            }
+        } catch (err) {}
+
+        const now = new Date();
+        const currentDay = String(now.getDay());
+        if (!activeDays.includes(currentDay)) {
+            return { allowed: false, reason: `Hoje (dia ${currentDay}) não está nos dias ativos de discagem da IA` };
+        }
+
+        const currentMinutes = now.getHours() * 60 + now.getMinutes();
+        const [startH, startM] = startTime.split(':').map(Number);
+        const [endH, endM] = endTime.split(':').map(Number);
+
+        const startMinutes = (startH || 8) * 60 + (startM || 0);
+        const endMinutes = (endH || 20) * 60 + (endM || 0);
+
+        if (currentMinutes < startMinutes || currentMinutes >= endMinutes) {
+            return { allowed: false, reason: `Horário atual (${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}) fora da janela (${startTime} às ${endTime})` };
+        }
+
+        return { allowed: true };
+    }
+
     async tick() {
         try {
             if (!this.running) return;
             const now = Date.now();
+
+            // 0. Check AI Operating Schedule (Business Hours & Active Days)
+            const scheduleCheck = await this.isWithinOperatingHours();
+            if (!scheduleCheck.allowed) {
+                // Flush AI lead queue outside operating hours
+                await redisClient.del('dialer:ai_lead_queue');
+                await redisClient.del('dialer:ai_active_dialing_channels');
+                if (now - this.lastSummaryLog > 30000) {
+                    console.log(`[AiPredictiveEngine] Discagem IA pausada: ${scheduleCheck.reason}`);
+                    this.lastSummaryLog = now;
+                }
+                return;
+            }
+
             const oneMinuteAgo = now - 60000;
 
             // Load settings from DB with fallbacks
@@ -109,10 +169,9 @@ export class AiPredictiveEngine {
             const ticksInWindow = 60000 / this.intervalMs;
             const maxDialsPerTick = Math.max(1, Math.ceil(targetCalls / ticksInWindow));
 
-            // 5. Get current active concurrent AI dialing lines and cap disparos by trunk capacity
+            // 5. Query ChannelManager for available slots respecting global trunk capacity & human reservation
             const activeLines = await redisClient.scard('dialer:ai_active_dialing_channels') || 0;
-            const availableLines = Math.max(0, maxChannels - activeLines);
-            const disparos = Math.min(dialsNeeded, maxDialsPerTick, availableLines);
+            const disparos = await channelManager.getAvailableSlots('ai_agent', Math.min(dialsNeeded, maxDialsPerTick));
 
             if (now - this.lastSummaryLog > 10000) {
                 console.log(`[AiPredictiveEngine] Pacing Loop - CPM Target: ${cpm}, Active Lines: ${activeLines}/${maxChannels}, Dials Last Min: ${recentDialsCount}/${targetCalls}, Needed: ${dialsNeeded}, Max/Tick: ${maxDialsPerTick}, Disparos: ${disparos}`);
@@ -176,8 +235,9 @@ export class AiPredictiveEngine {
                 if ((dialedPhone.length === 12 || dialedPhone.length === 13) && dialedPhone.startsWith('55')) {
                     dialedPhone = dialedPhone.substring(2);
                 }
-                if (prefix && !dialedPhone.startsWith(prefix)) {
-                    dialedPhone = prefix + dialedPhone;
+                const cleanPrefix = prefix ? prefix.replace(/\D/g, '') : '';
+                if (cleanPrefix && !dialedPhone.startsWith(cleanPrefix)) {
+                    dialedPhone = cleanPrefix + dialedPhone;
                 }
 
                 // Dials customer via AMI and routes to triagem-amd-ia context
