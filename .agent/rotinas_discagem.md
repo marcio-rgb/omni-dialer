@@ -2,6 +2,9 @@
 
 Este documento descreve detalhadamente a arquitetura, o fluxo de dados, as rotinas de discagem (manual e preditiva) e as chaves de estado gerenciadas no banco de dados e no Redis dentro do ecossistema do **OmniChat** e do **Dialer**.
 
+> [!NOTE]
+> Para obter as regras gerais de integração com a central telefônica Asterisk, variáveis de canal AMI, dialplans `[triagem-amd]` e fluxo de gravação de áudios, consulte também o documento [dialer-to-pbx.md](file:///home/marcio/ominichat/ecosystem/dialer-to-pbx.md).
+
 ---
 
 ## 1. Diferença Fundamental: Chamadas do Chat vs. Chamadas do Discador
@@ -166,6 +169,7 @@ graph TD
 
 #### O Fluxo de Atendimento do Humano (`PredictiveHuman`):
 * O listener em `PredictiveEngine.js` captura o evento.
+* **Isolamento de Campanhas de IA:** O listener verifica primeiramente se a campanha é do tipo IA (`isAiCampaign === true` ou associada a equipes do tipo `ai_agent`/`ia`). Se for campanha de IA, o `PredictiveEngine.js` ignora o evento (`return`), deixando o processamento integralmente sob responsabilidade do `AiPredictiveEngine.js`.
 * **Cenário A: Há agente disponível no ZSET `dialer:idle_agents`**
   1. Remove o agente do ZSET `dialer:idle_agents`.
   2. Atualiza o status do agente para `ocupado` (no banco PostgreSQL).
@@ -184,7 +188,61 @@ graph TD
 
 ---
 
-## 3. Gerenciamento de Conexão e Estado do Agente (WebSocket)
+## 3. Dialplans Customizados do Asterisk PBX (`extensions__00custom.conf`)
+
+Os dialplans do servidor Asterisk (`84.247.135.255` em `/etc/asterisk/vitalpbx/extensions__00custom.conf`) gerenciam o fluxo de mídia, gravação e redirecionamento SIP.
+
+### Contexto `[triagem-amd]`
+Executado quando uma chamada preditiva é atendida pelo destino:
+```asterisk
+[triagem-amd]
+exten => s,1,NoOp(Chamada atendida pelo cliente. Iniciando triagem AMD...)
+same => n,ExecIf($[ "${REC_STARTED}" != "yes" ]?Set(REC_FILENAME=/var/spool/asterisk/monitor/${STRFTIME(${EPOCH},,%Y/%m/%d)}/${STRFTIME(${EPOCH},,%H%M%S)}-PRED-${PHONE}-${UNIQUEID}))
+same => n,ExecIf($[ "${REC_STARTED}" != "yes" ]?MixMonitor(${REC_FILENAME}.wav,b))
+same => n,ExecIf($[ "${REC_STARTED}" != "yes" ]?Set(__REC_STARTED=yes))
+
+; Respeita a configuracao /admin/dialer: dialer_use_vosk_amd = false (BYPASS_VOSK = 1)
+same => n,GotoIf($["${BYPASS_VOSK}" = "1"]?humano)
+
+same => n,EAGI(vosk_amd.py)
+same => n,NoOp(Resultado do Vosk AMD: ${VOSK_AMD_STATUS})
+same => n,GotoIf($["${VOSK_AMD_STATUS}" = "HUMAN"]?humano:maquina)
+
+same => n(maquina),NoOp(Detectado Caixa Postal/Robo. Desligando...)
+same => n,Hangup()
+
+same => n(humano),NoOp(Humano detectado! Emitindo evento conforme IS_AI_CALL: ${IS_AI_CALL})
+same => n,ExecIf($[ "${IS_AI_CALL}" = "1" ]?UserEvent(PredictiveAi,ChannelId: ${CHANNEL},Phone: ${PHONE},LeadId: ${LEAD_ID},CampaignId: ${CAMPAIGN_ID}))
+same => n,ExecIf($[ "${IS_AI_CALL}" != "1" ]?UserEvent(PredictiveHuman,ChannelId: ${CHANNEL},Phone: ${PHONE},LeadId: ${LEAD_ID},CampaignId: ${CAMPAIGN_ID}))
+same => n,Wait(5)
+same => n,Hangup()
+```
+
+### Contexto `[cos-all-custom]` (Redirecionamento para LiveKit e ElevenLabs)
+```asterisk
+[cos-all-custom]
+exten => 9999,1,NoOp(Redirecionando chamada para a sala do LiveKit: ${AGENT_ROOM})
+same => n,ExecIf($[ "${REC_STARTED}" != "yes" ]?Set(REC_FILENAME=/var/spool/asterisk/monitor/${STRFTIME(${EPOCH},,%Y/%m/%d)}/${STRFTIME(${EPOCH},,%H%M%S)}-LIVEKIT-${PHONE}-${UNIQUEID}))
+same => n,ExecIf($[ "${REC_STARTED}" != "yes" ]?MixMonitor(${REC_FILENAME}.wav,b))
+same => n,ExecIf($[ "${REC_STARTED}" != "yes" ]?Set(__REC_STARTED=yes))
+same => n,Dial(PJSIP/livekit/sip:${AGENT_ROOM}@live.creditobr.org:5060)
+
+exten => 9998,1,NoOp(Redirecionando para ElevenLabs AI Agent: ${ELEVENLABS_AGENT_ID})
+same => n,ExecIf($[ "${REC_STARTED}" != "yes" ]?Set(REC_FILENAME=/var/spool/asterisk/monitor/${STRFTIME(${EPOCH},,%Y/%m/%d)}/${STRFTIME(${EPOCH},,%H%M%S)}-ELEVEN-${PHONE}-${UNIQUEID}))
+same => n,ExecIf($[ "${REC_STARTED}" != "yes" ]?MixMonitor(${REC_FILENAME}.wav,b))
+same => n,ExecIf($[ "${REC_STARTED}" != "yes" ]?Set(__REC_STARTED=yes))
+same => n,Dial(PJSIP/anonymous/sip:${ELEVENLABS_AGENT_ID}@sip.rtc.elevenlabs.io:5060)
+same => n,Hangup()
+```
+
+### Fluxo de Download e Gravações de Áudio Backend (`recordingQueue.js`)
+1. **Local de Gravação no PBX:** `/var/spool/asterisk/monitor/YYYY/MM/DD/` (arquivos `.wav` ou `.wav.wav`).
+2. **Endpoint HTTP Nginx:** Expósito via `https://pbx.creditobr.com.br/monitor/...` (HTTP 200 OK).
+3. **Mecanismo de Retentativa:** O worker `recordingQueue.js` tenta o download direto via `/monitor/` e possui *fallback* automático para o sufixo duplo `.wav.wav` gerado pelo script de fusão de estéreo do VitalPBX (`mix-stereo.sh`).
+
+---
+
+## 4. Gerenciamento de Conexão e Estado do Agente (WebSocket)
 
 A comunicação em tempo real de controle do agente com o discador ocorre via conexão WebSocket persistente no endpoint `/api/v1/calls/ws?agentId={id}`.
 
@@ -227,7 +285,7 @@ Ao detectar o fechamento do socket:
 
 ---
 
-## 4. Estrutura de Chaves no Redis
+## 5. Estrutura de Chaves no Redis
 
 O Redis é utilizado como banco em memória de alta performance para gerenciar o estado da operação de telefonia em tempo real. Seguem as principais chaves utilizadas:
 
@@ -247,6 +305,7 @@ O Redis é utilizado como banco em memória de alta performance para gerenciar o
 | `dialer:active_dialing_channels` | **Set** | Lista de IDs de canais atualmente em processo de discagem/ring. |
 | `dialer:dialing_calls:${leadId}` | **Hash** | Cache temporário com detalhes do lead discado (`leadId`, `phone`, `name`, `timestamp`) usado na recuperação de dados do canal. Expira em 45 segundos. |
 | `dialer:inflated_success_rate` | **String** | Chave temporária ativada em caso de abandono. Trava a taxa de sucesso calculada em 100% (1.0) para diminuir disparos por 30s. |
+| `dialer:recent_debug_logs` | **List** | Fila dos últimos 200 logs de debug e AMI para alimentação instantânea do Console Debug em tempo real. |
 | `dialer:stats:${date}:total` | **String (Counter)**| Contador diário de chamadas discadas. |
 | `dialer:stats:${date}:answered` | **String (Counter)**| Contador diário de chamadas atendidas. |
 | `dialer:stats:${date}:abandoned` | **String (Counter)**| Contador diário de chamadas abandonadas (sem agente). |
