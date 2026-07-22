@@ -23,8 +23,8 @@ services:
       - AMI_PORT=5038
       - AMI_USER=Omnichat
       - AMI_SECRET=ypnqYP7EHNtYFkqww23243rwew423
-      - DIALER_OMNICHAT_SERVER_URL=http://omnichat_backend:3000
-      - UPDATE_TIMESTAMP=1784747879
+      - DIALER_OMNICHAT_SERVER_URL=http://omnichat_server:3000
+      - UPDATE_TIMESTAMP=1784756955
     ports:
       - "3001:3001"
     networks:
