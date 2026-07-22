@@ -117,7 +117,7 @@ export class AiPredictiveEngine {
             let cpm = 10;
             let maxChannels = 30;
             let pbxContext = 'cos-all';
-            let dialerContext = 'triagem-amd-ia';
+            let dialerContext = 'triagem-amd';
             let pbxTrunk = null;
             let predictiveTrunk = null;
             let useVoskAmd = true;
@@ -131,6 +131,7 @@ export class AiPredictiveEngine {
                                 'dialer_ai_max_channels',
                                 'vitalpbx_context',
                                 'dialer_ai_context',
+                                'dialer_context',
                                 'vitalpbx_trunk',
                                 'dialer_predictive_trunk',
                                 'dialer_ai_use_vosk_amd'
@@ -145,8 +146,10 @@ export class AiPredictiveEngine {
                         maxChannels = parseInt(s.value) || 30;
                     } else if (s.key === 'vitalpbx_context' && s.value) {
                         pbxContext = s.value;
-                    } else if (s.key === 'dialer_ai_context' && s.value) {
+                    } else if (s.key === 'dialer_ai_context' && s.value && s.value.trim() !== '' && s.value !== 'triagem-amd-ia') {
                         dialerContext = s.value;
+                    } else if (s.key === 'dialer_context' && s.value && s.value.trim() !== '') {
+                        if (dialerContext === 'triagem-amd') dialerContext = s.value;
                     } else if (s.key === 'vitalpbx_trunk' && s.value) {
                         pbxTrunk = s.value;
                     } else if (s.key === 'dialer_predictive_trunk' && s.value) {
@@ -193,9 +196,9 @@ export class AiPredictiveEngine {
     /**
      * Core dialer execution. Pops leads and originates calls.
      */
-    async triggerDialing(disparos, pbxContext, pbxTrunk, useVoskAmd = true, dialerContext = 'triagem-amd-ia') {
+    async triggerDialing(disparos, pbxContext, pbxTrunk, useVoskAmd = true, dialerContext = 'triagem-amd') {
         const resolvedPbxContext = pbxContext || 'cos-all';
-        const resolvedDialerContext = dialerContext || 'triagem-amd-ia';
+        const resolvedDialerContext = (dialerContext && dialerContext !== 'triagem-amd-ia') ? dialerContext : 'triagem-amd';
         const resolvedPbxTrunk = pbxTrunk && pbxTrunk.trim() !== '' ? pbxTrunk : '';
 
         // Check queue length
