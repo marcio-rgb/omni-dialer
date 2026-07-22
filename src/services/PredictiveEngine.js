@@ -334,6 +334,19 @@ export class PredictiveEngine {
             }
         }
 
+        // Double check active human campaigns before originating
+        const activeHumanCampaigns = await prisma.campaign.findMany({
+            where: {
+                dialingMode: 'predictive',
+                status: { notIn: ['paused', 'deleted', 'completed'] }
+            },
+            select: { id: true }
+        });
+        if (activeHumanCampaigns.length === 0) {
+            await redisClient.del('dialer:lead_queue');
+            return;
+        }
+
         const countToPop = Math.min(disparos, queueLength);
         if (countToPop <= 0) return;
 
@@ -545,7 +558,8 @@ export class PredictiveEngine {
                 .map(c => c.id);
 
             if (activeCampaignIds.length === 0) {
-                console.log('[PredictiveEngine] No active predictive campaigns with idle agents found.');
+                console.log('[PredictiveEngine] No active predictive campaigns with idle agents found. Flushing lead queue.');
+                await redisClient.del('dialer:lead_queue');
                 return;
             }
 

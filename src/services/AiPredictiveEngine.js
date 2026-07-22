@@ -207,8 +207,30 @@ export class AiPredictiveEngine {
             if (!this.lastRefillTime || now - this.lastRefillTime >= 10000) {
                 this.lastRefillTime = now;
                 await this.refillLeadQueue();
-                queueLength = await redisClient.llen('dialer:ai_lead_queue');
             }
+        }
+        // Double check that there are active AI campaigns running before originating
+        const activeAiCampaigns = await prisma.campaign.findMany({
+            where: {
+                dialingMode: 'predictive',
+                status: { notIn: ['paused', 'deleted', 'completed'] }
+            },
+            select: { id: true, teamId: true }
+        });
+        const iaTeams = await prisma.teams.findMany({
+            where: { team_type: { in: ['ia', 'ai_agent'] } },
+            select: { id: true }
+        });
+        const iaTeamIds = iaTeams.map(t => t.id);
+        const hasActiveAiCampaign = activeAiCampaigns.some(c => {
+            if (!c.teamId) return false;
+            const cTeams = c.teamId.split(',').map(t => t.trim()).filter(t => t);
+            return cTeams.some(t => iaTeamIds.includes(t));
+        });
+
+        if (!hasActiveAiCampaign) {
+            await redisClient.del('dialer:ai_lead_queue');
+            return;
         }
 
         const countToPop = Math.min(disparos, queueLength);
@@ -351,7 +373,8 @@ export class AiPredictiveEngine {
                 .map(c => c.id);
 
             if (activeCampaignIds.length === 0) {
-                console.log('[AiPredictiveEngine] No active predictive AI campaigns found.');
+                console.log('[AiPredictiveEngine] No active predictive AI campaigns found. Flushing AI lead queue.');
+                await redisClient.del('dialer:ai_lead_queue');
                 return;
             }
 
