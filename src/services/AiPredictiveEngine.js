@@ -329,7 +329,8 @@ export class AiPredictiveEngine {
                     LEAD_ID: String(lead.id),
                     CAMPAIGN_ID: String(lead.campaignId),
                     PHONE: dialedPhone,
-                    IS_AI_CALL: '1'
+                    IS_AI_CALL: '1',
+                    O_RING_TIME: '30'
                 };
 
                 // Add flag to bypass Vosk AMD in Asterisk dialplan if configured
