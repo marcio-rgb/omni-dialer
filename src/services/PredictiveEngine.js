@@ -944,7 +944,7 @@ export class PredictiveEngine {
                         phone: Phone,
                         status: 'atendida',
                         label: 'Atendida',
-                        operator: agent.name || `Agente ${agentId}`,
+                        operator: (agentObj && agentObj.name) ? agentObj.name : `Agente ${agentId}`,
                         time: '00:00'
                     })).catch(() => {});
 
