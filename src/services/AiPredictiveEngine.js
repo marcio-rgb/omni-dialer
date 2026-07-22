@@ -586,7 +586,7 @@ export class AiPredictiveEngine {
                                     const aiUsers = await prisma.users.findMany({
                                         where: {
                                             team_users: { some: { team_id: { in: teamIds } } },
-                                            role: 'ai_agent',
+                                            role: { in: ['ai_agent', 'ia'] },
                                             is_active: true
                                         }
                                     });
@@ -598,6 +598,25 @@ export class AiPredictiveEngine {
                             }
                         } catch (dbErr) {
                             console.error(`[AiPredictiveEngine] Error resolving campaign team users for Campaign ${CampaignId}:`, dbErr.message);
+                        }
+                    }
+
+                    // Fallback to default active AI Agent if campaign has no specific team user
+                    if (!agentId || !agentObj) {
+                        try {
+                            const fallbackAiAgent = await prisma.users.findFirst({
+                                where: {
+                                    role: { in: ['ai_agent', 'ia'] },
+                                    is_active: true
+                                }
+                            });
+                            if (fallbackAiAgent) {
+                                agentObj = fallbackAiAgent;
+                                agentId = fallbackAiAgent.id;
+                                console.log(`[AiPredictiveEngine] Fallback: Assigning call to default active AI Agent '${fallbackAiAgent.name}' (${fallbackAiAgent.id})`);
+                            }
+                        } catch (fallbackErr) {
+                            console.error('[AiPredictiveEngine] Error resolving fallback AI agent:', fallbackErr.message);
                         }
                     }
 
