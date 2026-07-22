@@ -873,11 +873,13 @@ export class PredictiveEngine {
                     // 3. Find or create Open Conversation
                     const conversation = await getOrCreateConversation(contact, agentId, cleanPhone);
  
-                    // 4. Create active call record in DB calls table
                     const callId = crypto.randomUUID();
-                    const roomName = `sala_agente_${agentId}`;
+                    const roomSuffix = LeadId ? LeadId : callId.substring(0, 8);
+                    const roomName = (isAiCampaign || (agentObj && agentObj.role === 'ai_agent'))
+                        ? `sala_agente_${agentId}_${roomSuffix}`
+                        : `sala_agente_${agentId}`;
                     
-                    // Clean up any old call with the same room_name to prevent unique constraint violation
+                    // Clean up any old call with the exact same room_name to prevent unique constraint violation
                     try {
                         await prisma.calls.deleteMany({
                             where: { room_name: roomName }
