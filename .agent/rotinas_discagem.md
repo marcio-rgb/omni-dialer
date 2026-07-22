@@ -310,3 +310,19 @@ O Redis é utilizado como banco em memória de alta performance para gerenciar o
 | `dialer:stats:${date}:answered` | **String (Counter)**| Contador diário de chamadas atendidas. |
 | `dialer:stats:${date}:abandoned` | **String (Counter)**| Contador diário de chamadas abandonadas (sem agente). |
 | `dialer:stats:${date}:productive` | **String (Counter)**| Contador diário de chamadas produtivas (conectadas a um agente). |
+
+---
+
+## 6. Configurações de Ambiente & Rede de Produção (Stack 40 `omni-dialer`)
+
+O microsserviço `omnichat_dialer` roda como serviço da Stack 40 no Portainer utilizando a rede interna Docker Swarm (`minha_rede`):
+
+* **`LIVEKIT_URL`**: `http://livekit_livekit:7880` (Endereço DNS do Swarm para comunicação entre stacks no formato `<stack>_<servico>`. O discador na Stack 40 conecta-se ao LiveKit na Stack `livekit` via rede privada do Swarm, sem tráfego público ou Traefik).
+* **`LIVEKIT_API_KEY` & `LIVEKIT_API_SECRET`**: Credenciais de autenticação JWT do LiveKit (`omnichat_livekit_key`).
+* **`DATABASE_URL`**: String de conexão interna com o PostgreSQL (`postgresql://postgres:...@postgres:5432/omnichat_db`).
+* **`REDIS_HOST` & `REDIS_PORT`**: Conexão interna com a instância de cache (`redis:6379`).
+* **`DIALER_OMNICHAT_SERVER_URL`**: `http://server:3000` ou `http://omnichat_backend:3000`.
+* **`VITALPBX_API_URL` & `AMI_HOST`**: Conexão com o PABX Asterisk (`pbx.creditobr.com.br`).
+
+> [!IMPORTANT]
+> **Proibição de Variáveis de Ambiente em Stacks:** Na declaração da Stack 40 (`omni-dialer`), todos os parâmetros devem utilizar **valores diretos/hardcoded** no arquivo `docker-compose.yml` (inclusive `name: minha_rede`), sem utilizar expressões de variáveis dinâmicas `${VAR}`.

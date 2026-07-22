@@ -111,6 +111,17 @@ export class PredictiveEngine {
             if (!this.running) return;
             const now = Date.now();
 
+            // 0. Check Master Engine Pause switch
+            const isMasterPaused = (await redisClient.get('dialer:engine_paused')) === '1';
+            if (isMasterPaused) {
+                await redisClient.del('dialer:lead_queue');
+                if (now - (this.lastSummaryLog || 0) > 15000) {
+                    console.log('[PredictiveEngine] Discagem Humana pausada via chave de controle master.');
+                    this.lastSummaryLog = now;
+                }
+                return;
+            }
+
             // Check Operating Schedule (Business Hours & Active Days)
             const scheduleCheck = await this.isWithinOperatingHours();
             if (!scheduleCheck.allowed) {
@@ -127,7 +138,8 @@ export class PredictiveEngine {
             // 0. Check active human predictive campaigns
             const activeHumanCampaigns = await prisma.campaign.findMany({
                 where: { 
-                    dialingMode: 'predictive'
+                    dialingMode: 'predictive',
+                    status: { notIn: ['paused', 'deleted', 'completed'] }
                 }
             });
 
@@ -366,7 +378,8 @@ export class PredictiveEngine {
         // Double check active human campaigns before originating
         const activeHumanCampaigns = await prisma.campaign.findMany({
             where: {
-                dialingMode: 'predictive'
+                dialingMode: 'predictive',
+                status: { notIn: ['paused', 'deleted', 'completed'] }
             },
             select: { id: true }
         });
@@ -562,7 +575,8 @@ export class PredictiveEngine {
             // 3. Find active predictive campaigns
             const activeCampaigns = await prisma.campaign.findMany({
                 where: { 
-                    dialingMode: 'predictive'
+                    dialingMode: 'predictive',
+                    status: { notIn: ['paused', 'deleted', 'completed'] }
                 }
             });
 

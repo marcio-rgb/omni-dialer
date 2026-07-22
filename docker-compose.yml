@@ -7,11 +7,11 @@ services:
     restart: always
     environment:
       - PORT=3001
-      - DATABASE_URL=postgresql://postgres:ojr6DNM25InIg3qoYI4nbUL5Cx04iCiCn1122@${DB_HOST:-postgres}:5432/omnichat_db?schema=public
+      - DATABASE_URL=postgresql://postgres:ojr6DNM25InIg3qoYI4nbUL5Cx04iCiCn1122@postgres:5432/omnichat_db?schema=public
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=ojr6DNM25InIg3qoYI4nbUL5Cx04iCiC
-      - LIVEKIT_URL=http://${LIVEKIT_HOST:-livekit}:7880
+      - LIVEKIT_URL=http://livekit_livekit:7880
       - LIVEKIT_API_KEY=omnichat_livekit_key
       - LIVEKIT_API_SECRET=OmniChat_LiveKit_Secret_Key_2026_SecurePass!987
       - LIVEKIT_SIP_HOST=live.creditobr.org:5060
@@ -23,8 +23,8 @@ services:
       - AMI_PORT=5038
       - AMI_USER=Omnichat
       - AMI_SECRET=ypnqYP7EHNtYFkqww23243rwew423
-      - DIALER_OMNICHAT_SERVER_URL=http://server:3000
-      - UPDATE_TIMESTAMP=1784738696
+      - DIALER_OMNICHAT_SERVER_URL=http://omnichat_backend:3000
+      - UPDATE_TIMESTAMP=1784747879
     ports:
       - "3001:3001"
     networks:
@@ -47,4 +47,4 @@ services:
 networks:
   minha_rede:
     external: true
-    name: ${DOCKER_NETWORK_NAME:-minha_rede}
+    name: minha_rede

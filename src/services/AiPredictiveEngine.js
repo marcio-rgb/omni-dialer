@@ -98,6 +98,17 @@ export class AiPredictiveEngine {
             if (!this.running) return;
             const now = Date.now();
 
+            // 0. Check Master Engine Pause switch
+            const isMasterPaused = (await redisClient.get('dialer:engine_paused')) === '1';
+            if (isMasterPaused) {
+                await redisClient.del('dialer:ai_lead_queue');
+                if (now - (this.lastSummaryLog || 0) > 15000) {
+                    console.log('[AiPredictiveEngine] Discagem IA pausada via chave de controle master.');
+                    this.lastSummaryLog = now;
+                }
+                return;
+            }
+
             // 0. Check AI Operating Schedule (Business Hours & Active Days)
             const scheduleCheck = await this.isWithinOperatingHours();
             if (!scheduleCheck.allowed) {
@@ -248,7 +259,8 @@ export class AiPredictiveEngine {
         // Double check that there are active AI campaigns running before originating
         const activeAiCampaigns = await prisma.campaign.findMany({
             where: {
-                dialingMode: 'predictive'
+                dialingMode: 'predictive',
+                status: { notIn: ['paused', 'deleted', 'completed'] }
             },
             select: { id: true, teamId: true }
         });
@@ -405,7 +417,8 @@ export class AiPredictiveEngine {
             // 2. Find active predictive campaigns
             const activeCampaigns = await prisma.campaign.findMany({
                 where: { 
-                    dialingMode: 'predictive'
+                    dialingMode: 'predictive',
+                    status: { notIn: ['paused', 'deleted', 'completed'] }
                 }
             });
 
