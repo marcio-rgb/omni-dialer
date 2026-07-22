@@ -728,7 +728,21 @@ export class PredictiveEngine {
                     let agentId = null;
                     let agentObj = null;
 
-                    if (allowedAgentIds) {
+                    if (isAiCampaign) {
+                        if (allowedAgentIds && allowedAgentIds.size > 0) {
+                            agentId = [...allowedAgentIds][0];
+                        } else {
+                            try {
+                                const aiUser = await prisma.users.findFirst({
+                                    where: { role: 'ai_agent' },
+                                    select: { id: true }
+                                });
+                                agentId = aiUser ? aiUser.id : 'ai_agent_default';
+                            } catch (e) {
+                                agentId = 'ai_agent_default';
+                            }
+                        }
+                    } else if (allowedAgentIds) {
                         for (const id of idleAgents) {
                             if (allowedAgentIds.has(id)) {
                                 const isAi = this.aiAgentIds && this.aiAgentIds.has(String(id));
