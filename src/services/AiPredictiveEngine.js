@@ -116,7 +116,8 @@ export class AiPredictiveEngine {
             // Load settings from DB with fallbacks
             let cpm = 10;
             let maxChannels = 30;
-            let pbxContext = 'triagem-amd-ia';
+            let pbxContext = 'cos-all';
+            let dialerContext = 'triagem-amd-ia';
             let pbxTrunk = null;
             let predictiveTrunk = null;
             let useVoskAmd = true;
@@ -128,6 +129,7 @@ export class AiPredictiveEngine {
                             in: [
                                 'dialer_ai_cpm',
                                 'dialer_ai_max_channels',
+                                'vitalpbx_context',
                                 'dialer_ai_context',
                                 'vitalpbx_trunk',
                                 'dialer_predictive_trunk',
@@ -141,8 +143,10 @@ export class AiPredictiveEngine {
                         cpm = parseFloat(s.value) || 10;
                     } else if (s.key === 'dialer_ai_max_channels' && s.value) {
                         maxChannels = parseInt(s.value) || 30;
-                    } else if (s.key === 'dialer_ai_context' && s.value) {
+                    } else if (s.key === 'vitalpbx_context' && s.value) {
                         pbxContext = s.value;
+                    } else if (s.key === 'dialer_ai_context' && s.value) {
+                        dialerContext = s.value;
                     } else if (s.key === 'vitalpbx_trunk' && s.value) {
                         pbxTrunk = s.value;
                     } else if (s.key === 'dialer_predictive_trunk' && s.value) {
@@ -179,7 +183,7 @@ export class AiPredictiveEngine {
             }
 
             if (disparos > 0) {
-                await this.triggerDialing(disparos, pbxContext, predictiveTrunk || pbxTrunk, useVoskAmd);
+                await this.triggerDialing(disparos, pbxContext, predictiveTrunk || pbxTrunk, useVoskAmd, dialerContext);
             }
         } catch (error) {
             console.error('[AiPredictiveEngine] Error in tick:', error);
@@ -189,8 +193,9 @@ export class AiPredictiveEngine {
     /**
      * Core dialer execution. Pops leads and originates calls.
      */
-    async triggerDialing(disparos, pbxContext, pbxTrunk, useVoskAmd = true) {
-        const resolvedPbxContext = pbxContext || 'triagem-amd-ia';
+    async triggerDialing(disparos, pbxContext, pbxTrunk, useVoskAmd = true, dialerContext = 'triagem-amd-ia') {
+        const resolvedPbxContext = pbxContext || 'cos-all';
+        const resolvedDialerContext = dialerContext || 'triagem-amd-ia';
         const resolvedPbxTrunk = pbxTrunk && pbxTrunk.trim() !== '' ? pbxTrunk : '';
 
         // Check queue length
@@ -265,7 +270,7 @@ export class AiPredictiveEngine {
 
                 amiService.originateCall(
                     destChannel,
-                    resolvedPbxContext,
+                    resolvedDialerContext,
                     's',
                     1,
                     variables
