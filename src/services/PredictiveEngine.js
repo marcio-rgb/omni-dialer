@@ -124,6 +124,34 @@ export class PredictiveEngine {
                 return;
             }
 
+            // 0. Check active human predictive campaigns
+            const activeHumanCampaigns = await prisma.campaign.findMany({
+                where: { 
+                    dialingMode: 'predictive',
+                    status: { notIn: ['paused', 'deleted', 'completed'] }
+                }
+            });
+
+            let iaTeamIds = new Set();
+            try {
+                const iaTeams = await prisma.teams.findMany({
+                    where: { team_type: { in: ['ia', 'ai_agent'] } },
+                    select: { id: true }
+                });
+                iaTeams.forEach(t => iaTeamIds.add(t.id));
+            } catch (dbErr) {}
+
+            const activeHumanCampaignList = activeHumanCampaigns.filter(c => {
+                if (!c.teamId) return false;
+                const cTeams = c.teamId.split(',').map(t => t.trim()).filter(t => t);
+                return !cTeams.some(t => iaTeamIds.has(t));
+            });
+
+            if (activeHumanCampaignList.length === 0) {
+                // No active human predictive campaigns running!
+                return;
+            }
+
             const oneMinuteAgo = now - 60000;
 
             // 1. Fetch AI agent IDs to distinguish them from WebRTC human agents
@@ -716,7 +744,7 @@ export class PredictiveEngine {
                                         where: { id: { in: teamIds } },
                                         select: { team_type: true }
                                     });
-                                    isAiCampaign = teams.some(t => t.team_type === 'ai_agent');
+                                    isAiCampaign = teams.some(t => t.team_type === 'ai_agent' || t.team_type === 'ia');
                                     console.log(`[PredictiveEngine] Campaign ${CampaignId} (isAi: ${isAiCampaign}) requires agents from teams [${teamIds.join(', ')}] (${allowedAgentIds.size} agents).`);
                                 }
                             }
@@ -725,26 +753,17 @@ export class PredictiveEngine {
                         }
                     }
 
-                    // Try to pop an available agent from the campaign's team who is active (WebRTC for human, direct for AI)
+                    if (isAiCampaign) {
+                        console.log(`[PredictiveEngine] Campaign ${CampaignId} is an AI campaign. Ignoring in human engine.`);
+                        return;
+                    }
+
+                    // Try to pop an available human agent from the campaign's team who is active
                     const idleAgents = await redisClient.zrange('dialer:idle_agents', 0, -1);
                     let agentId = null;
                     let agentObj = null;
 
-                    if (isAiCampaign) {
-                        if (allowedAgentIds && allowedAgentIds.size > 0) {
-                            agentId = [...allowedAgentIds][0];
-                        } else {
-                            try {
-                                const aiUser = await prisma.users.findFirst({
-                                    where: { role: 'ai_agent' },
-                                    select: { id: true }
-                                });
-                                agentId = aiUser ? aiUser.id : 'ai_agent_default';
-                            } catch (e) {
-                                agentId = 'ai_agent_default';
-                            }
-                        }
-                    } else if (allowedAgentIds) {
+                    if (allowedAgentIds) {
                         for (const id of idleAgents) {
                             if (allowedAgentIds.has(id)) {
                                 const isAi = this.aiAgentIds && this.aiAgentIds.has(String(id));
