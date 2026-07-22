@@ -532,6 +532,32 @@ export class AiPredictiveEngine {
      */
     setupAmiListeners() {
         amiService.on('UserEvent', async (event) => {
+            if (event.UserEvent === 'LiveKitBridgeConnected') {
+                const { Phone, AgentRoom } = event;
+                const logMsg = `[AiPredictiveEngine] LiveKit SIP atendeu e ponteou a chamada de IA! Sala: ${AgentRoom}, Phone: ${Phone}`;
+                console.log(logMsg);
+                
+                try {
+                    await redisClient.publish('dialer:events', JSON.stringify({
+                        phone: Phone || 'N/A',
+                        status: 'livekit_connected',
+                        label: 'LiveKit Conectado (IA) 🟢',
+                        operator: AgentRoom,
+                        time: new Date().toLocaleTimeString('pt-BR')
+                    }));
+
+                    await redisClient.lpush('dialer:recent_debug_logs', JSON.stringify({
+                        timestamp: new Date().toISOString(),
+                        level: 'SUCCESS',
+                        message: logMsg
+                    }));
+                    await redisClient.ltrim('dialer:recent_debug_logs', 0, 199);
+                } catch (e) {
+                    console.error('[AiPredictiveEngine] Error handling LiveKitBridgeConnected event:', e.message);
+                }
+                return;
+            }
+
             if (event.UserEvent === 'PredictiveAi') {
                 const { Channel, ChannelId, Phone, LeadId, CampaignId } = event;
                 const channelName = Channel || ChannelId || event.Channelid;
