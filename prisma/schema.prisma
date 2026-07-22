@@ -13,6 +13,7 @@ model Campaign {
   dialingMode    String
   aggressiveness Float    @default(1.0)
   teamId         String?
+  status         String?  @default("active")
   createdAt      DateTime @default(now())
   updatedAt      DateTime
   Lead           Lead[]
@@ -43,6 +44,7 @@ model Lead {
   phone3     String?
   extraData  Json?
   campaignId Int?
+  status     String?   @default("pending")
   createdAt  DateTime  @default(now())
   updatedAt  DateTime
   Campaign   Campaign? @relation(fields: [campaignId], references: [id])
