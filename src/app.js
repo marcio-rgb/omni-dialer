@@ -36,11 +36,16 @@ console.error = (...args) => {
 function publishDebugLog(level, args) {
     try {
         const msg = args.map(arg => typeof arg === 'object' ? JSON.stringify(arg) : String(arg)).join(' ');
-        redisClient.publish('dialer:debug_logs', JSON.stringify({
-            timestamp: new Date().toLocaleTimeString('pt-BR'),
+        const logData = {
+            timestamp: new Date().toLocaleTimeString('pt-BR', { hour12: false }) + '.' + String(new Date().getMilliseconds()).padStart(3, '0'),
             level: level,
             message: msg
-        })).catch(() => {});
+        };
+        const payload = JSON.stringify(logData);
+        redisClient.publish('dialer:debug_logs', payload).catch(() => {});
+        redisClient.lpush('dialer:recent_debug_logs', payload).then(() => {
+            redisClient.ltrim('dialer:recent_debug_logs', 0, 199);
+        }).catch(() => {});
     } catch (err) {}
 }
 
