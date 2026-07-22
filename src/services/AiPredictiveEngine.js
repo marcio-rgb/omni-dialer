@@ -319,7 +319,7 @@ export class AiPredictiveEngine {
         try {
             // 1. Fetch active AI teams
             const iaTeams = await prisma.teams.findMany({
-                where: { team_type: 'ia' },
+                where: { team_type: { in: ['ia', 'ai_agent'] } },
                 select: { id: true }
             });
             const iaTeamIds = iaTeams.map(t => t.id);
@@ -330,7 +330,10 @@ export class AiPredictiveEngine {
 
             // 2. Find active predictive campaigns
             const activeCampaigns = await prisma.campaign.findMany({
-                where: { dialingMode: 'predictive' }
+                where: { 
+                    dialingMode: 'predictive',
+                    status: { notIn: ['paused', 'deleted', 'completed'] }
+                }
             });
 
             // 3. Filter campaigns to only those belonging to AI teams

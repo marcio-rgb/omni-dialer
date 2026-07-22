@@ -514,14 +514,17 @@ export class PredictiveEngine {
 
             // 3. Find active predictive campaigns
             const activeCampaigns = await prisma.campaign.findMany({
-                where: { dialingMode: 'predictive' }
+                where: { 
+                    dialingMode: 'predictive',
+                    status: { notIn: ['paused', 'deleted', 'completed'] }
+                }
             });
 
             // Fetch IA teams to exclude from human dialing
             let iaTeamIds = new Set();
             try {
                 const iaTeams = await prisma.teams.findMany({
-                    where: { team_type: 'ia' },
+                    where: { team_type: { in: ['ia', 'ai_agent'] } },
                     select: { id: true }
                 });
                 iaTeams.forEach(t => iaTeamIds.add(t.id));
