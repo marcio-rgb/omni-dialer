@@ -248,8 +248,7 @@ export class AiPredictiveEngine {
         // Double check that there are active AI campaigns running before originating
         const activeAiCampaigns = await prisma.campaign.findMany({
             where: {
-                dialingMode: 'predictive',
-                status: { notIn: ['paused', 'deleted', 'completed'] }
+                dialingMode: 'predictive'
             },
             select: { id: true, teamId: true }
         });
@@ -406,8 +405,7 @@ export class AiPredictiveEngine {
             // 2. Find active predictive campaigns
             const activeCampaigns = await prisma.campaign.findMany({
                 where: { 
-                    dialingMode: 'predictive',
-                    status: { notIn: ['paused', 'deleted', 'completed'] }
+                    dialingMode: 'predictive'
                 }
             });
 

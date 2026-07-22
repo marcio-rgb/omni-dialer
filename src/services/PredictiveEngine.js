@@ -127,8 +127,7 @@ export class PredictiveEngine {
             // 0. Check active human predictive campaigns
             const activeHumanCampaigns = await prisma.campaign.findMany({
                 where: { 
-                    dialingMode: 'predictive',
-                    status: { notIn: ['paused', 'deleted', 'completed'] }
+                    dialingMode: 'predictive'
                 }
             });
 
@@ -367,8 +366,7 @@ export class PredictiveEngine {
         // Double check active human campaigns before originating
         const activeHumanCampaigns = await prisma.campaign.findMany({
             where: {
-                dialingMode: 'predictive',
-                status: { notIn: ['paused', 'deleted', 'completed'] }
+                dialingMode: 'predictive'
             },
             select: { id: true }
         });
@@ -564,8 +562,7 @@ export class PredictiveEngine {
             // 3. Find active predictive campaigns
             const activeCampaigns = await prisma.campaign.findMany({
                 where: { 
-                    dialingMode: 'predictive',
-                    status: { notIn: ['paused', 'deleted', 'completed'] }
+                    dialingMode: 'predictive'
                 }
             });
 
@@ -1036,10 +1033,10 @@ export class PredictiveEngine {
                     where: { id: { in: teamIds } }
                 });
                 
-                let maxCapacity = 1;
+                let maxCapacity = 10;
                 for (const t of teams) {
-                    if (t.team_type === 'ai_agent') {
-                        maxCapacity = Math.max(maxCapacity, t.max_channels || 1);
+                    if (t.team_type === 'ai_agent' || t.team_type === 'ia') {
+                        maxCapacity = Math.max(maxCapacity, t.max_channels || 10);
                     }
                 }
                 

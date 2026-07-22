@@ -240,10 +240,6 @@ export default async function callRoutes(fastify, opts) {
 
                 console.log(`[AMI] Hangup received for predictive call channel ${event.Channel} (Uniqueid: ${uniqueId}) associated with Agent ${predictiveAgentId}. Cause: ${event.Cause} (${event['Cause-txt']})`);
 
-                // Remove the mapping
-                await redisClient.del(`dialer:predictive_call_agent:${uniqueId}`);
-
-                const agentObj = await prisma.users.findUnique({ where: { id: predictiveAgentId } });
                 if (agentObj && agentObj.role !== 'ai_agent') {
                     await redisClient.del(`dialer:active_call_channel:${predictiveAgentId}`);
                 }
@@ -283,10 +279,10 @@ export default async function callRoutes(fastify, opts) {
                         const teams = await prisma.teams.findMany({
                             where: { id: { in: teamIds } }
                         });
-                        let maxCapacity = 1;
+                        let maxCapacity = 10;
                         for (const t of teams) {
-                            if (t.team_type === 'ai_agent') {
-                                maxCapacity = Math.max(maxCapacity, t.max_channels || 1);
+                            if (t.team_type === 'ai_agent' || t.team_type === 'ia') {
+                                maxCapacity = Math.max(maxCapacity, t.max_channels || 10);
                             }
                         }
                         if (activeCallsCount < maxCapacity) {
