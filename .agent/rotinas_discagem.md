@@ -318,10 +318,10 @@ O Redis é utilizado como banco em memória de alta performance para gerenciar o
 O microsserviço `omnichat_dialer` roda como serviço da Stack 40 no Portainer utilizando a rede interna Docker Swarm (`minha_rede`):
 
 * **`LIVEKIT_URL`**: `http://livekit_livekit:7880` (Endereço DNS do Swarm para comunicação entre stacks no formato `<stack>_<servico>`. O discador na Stack 40 conecta-se ao LiveKit na Stack `livekit` via rede privada do Swarm, sem tráfego público ou Traefik).
-* **`LIVEKIT_API_KEY` & `LIVEKIT_API_SECRET`**: Credenciais de autenticação JWT do LiveKit (`omnichat_livekit_key`).
+* **`LIVEKIT_API_KEY` & `LIVEKIT_API_SECRET`**: Credenciais de autenticação JWT de Produção (`omnichat_livekit_key` / `OmniChat_LiveKit_Secret_Key_2026_SecurePass!987`). *Nota: Chaves legado `devkey` / `devkeysecret32characterslongpass123` são estritamente para o ambiente de desenvolvimento local antigo e causam erro 401 se usadas em produção.*
 * **`DATABASE_URL`**: String de conexão interna com o PostgreSQL (`postgresql://postgres:...@postgres:5432/omnichat_db`).
 * **`REDIS_HOST` & `REDIS_PORT`**: Conexão interna com a instância de cache (`redis:6379`).
-* **`DIALER_OMNICHAT_SERVER_URL`**: `http://server:3000` ou `http://omnichat_backend:3000`.
+* **`DIALER_OMNICHAT_SERVER_URL`**: `http://omnichat_server:3000` (ou `http://server:3000` em ambiente local).
 * **`VITALPBX_API_URL` & `AMI_HOST`**: Conexão com o PABX Asterisk (`pbx.creditobr.com.br`).
 
 > [!IMPORTANT]

@@ -78,10 +78,10 @@ REDIS_HOST="localhost"
 REDIS_PORT=6379
 REDIS_PASSWORD=""
 
-# LiveKit Config
-LIVEKIT_URL="http://localhost:7880"
-LIVEKIT_API_KEY="devkey"
-LIVEKIT_API_SECRET="secret"
+# LiveKit Config (Utilizar 'omnichat_livekit_key' / 'OmniChat_LiveKit_Secret_Key_2026_SecurePass!987' em produção. 'devkey' / 'secret' são legados)
+LIVEKIT_URL="http://livekit_livekit:7880"
+LIVEKIT_API_KEY="omnichat_livekit_key"
+LIVEKIT_API_SECRET="OmniChat_LiveKit_Secret_Key_2026_SecurePass!987"
 
 # VitalPBX Config
 VITALPBX_API_URL="http://vitalpbx-host/api/v2"
