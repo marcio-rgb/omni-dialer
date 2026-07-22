@@ -66,13 +66,13 @@ export class PredictiveEngine {
         try {
             const dbSettings = await prisma.settings.findMany({
                 where: {
-                    key: { in: ['dialer_ai_start_time', 'dialer_ai_end_time', 'dialer_ai_active_days'] }
+                    key: { in: ['dialer_start_time', 'dialer_end_time', 'dialer_active_days'] }
                 }
             });
             for (const s of dbSettings) {
-                if (s.key === 'dialer_ai_start_time' && s.value) startTime = s.value.trim();
-                else if (s.key === 'dialer_ai_end_time' && s.value) endTime = s.value.trim();
-                else if (s.key === 'dialer_ai_active_days' && s.value) {
+                if (s.key === 'dialer_start_time' && s.value) startTime = s.value.trim();
+                else if (s.key === 'dialer_end_time' && s.value) endTime = s.value.trim();
+                else if (s.key === 'dialer_active_days' && s.value) {
                     try {
                         const parsed = JSON.parse(s.value);
                         if (Array.isArray(parsed)) activeDays = parsed.map(String);
@@ -86,15 +86,15 @@ export class PredictiveEngine {
         const now = new Date();
         const currentDay = String(now.getDay());
         if (!activeDays.includes(currentDay)) {
-            return { allowed: false, reason: `Hoje (dia ${currentDay}) não está nos dias ativos de discagem` };
+            return { allowed: false, reason: `Hoje (dia ${currentDay}) não está nos dias ativos de discagem humana` };
         }
 
         const currentMinutes = now.getHours() * 60 + now.getMinutes();
         const [startH, startM] = startTime.split(':').map(Number);
         const [endH, endM] = endTime.split(':').map(Number);
 
-        const startMinutes = (startH || 8) * 60 + (startM || 0);
-        const endMinutes = (endH || 20) * 60 + (endM || 0);
+        const startMinutes = (isNaN(startH) ? 8 : startH) * 60 + (isNaN(startM) ? 0 : startM);
+        const endMinutes = (isNaN(endH) ? 20 : endH) * 60 + (isNaN(endM) ? 0 : endM);
 
         if (currentMinutes < startMinutes || currentMinutes >= endMinutes) {
             return { allowed: false, reason: `Horário atual (${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}) fora da janela de atendimento (${startTime} às ${endTime})` };

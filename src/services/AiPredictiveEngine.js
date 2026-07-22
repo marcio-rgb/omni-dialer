@@ -83,8 +83,8 @@ export class AiPredictiveEngine {
         const [startH, startM] = startTime.split(':').map(Number);
         const [endH, endM] = endTime.split(':').map(Number);
 
-        const startMinutes = (startH || 8) * 60 + (startM || 0);
-        const endMinutes = (endH || 20) * 60 + (endM || 0);
+        const startMinutes = (isNaN(startH) ? 8 : startH) * 60 + (isNaN(startM) ? 0 : startM);
+        const endMinutes = (isNaN(endH) ? 20 : endH) * 60 + (isNaN(endM) ? 0 : endM);
 
         if (currentMinutes < startMinutes || currentMinutes >= endMinutes) {
             return { allowed: false, reason: `Horário atual (${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}) fora da janela (${startTime} às ${endTime})` };
