@@ -228,6 +228,16 @@ export default async function callRoutes(fastify, opts) {
             // Check if this Uniqueid is mapped to a predictive call agent
             const predictiveAgentId = await redisClient.get(`dialer:predictive_call_agent:${uniqueId}`);
             if (predictiveAgentId) {
+                const agentObj = await prisma.users.findUnique({ where: { id: predictiveAgentId } });
+                const isLocalChannel = event.Channel && (event.Channel.startsWith('Local/') || event.Channel.includes('Local/'));
+
+                // For AI agents, the initial Local channel hangup is just Asterisk transferring/redirecting the call to LiveKit SIP (extension 9999).
+                // Ignore this Local channel hangup so the call record remains ACTIVE.
+                if (agentObj && agentObj.role === 'ai_agent' && isLocalChannel) {
+                    console.log(`[AMI] Ignoring Local channel hangup (${event.Channel}) for AI Agent ${agentObj.name} (call transferred to LiveKit SIP).`);
+                    return;
+                }
+
                 console.log(`[AMI] Hangup received for predictive call channel ${event.Channel} (Uniqueid: ${uniqueId}) associated with Agent ${predictiveAgentId}. Cause: ${event.Cause} (${event['Cause-txt']})`);
 
                 // Remove the mapping
