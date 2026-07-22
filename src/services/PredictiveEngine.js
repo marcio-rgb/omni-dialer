@@ -227,6 +227,7 @@ export class PredictiveEngine {
      * Publishes current daily consolidated metrics to Redis Pub/Sub.
      */
     async publishRealtimeMetrics() {
+        try {
             const todayStr = new Date().toISOString().split('T')[0];
             const humanActive = await redisClient.scard('dialer:active_dialing_channels') || 0;
             const aiActive = await redisClient.scard('dialer:ai_active_dialing_channels') || 0;
