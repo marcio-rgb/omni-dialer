@@ -251,20 +251,30 @@ export class AiPredictiveEngine {
                     const prefixSetting = await prisma.settings.findUnique({
                         where: { key: 'dialer_ai_dial_prefix' }
                     });
-                    if (prefixSetting) {
-                        prefix = prefixSetting.value || '';
+                    if (prefixSetting && prefixSetting.value) {
+                        prefix = prefixSetting.value;
+                    } else {
+                        const defaultPrefix = await prisma.settings.findUnique({
+                            where: { key: 'dialer_dial_prefix' }
+                        });
+                        prefix = defaultPrefix?.value || '';
                     }
                 } catch (err) {
                     console.error('[AiPredictiveEngine] Error fetching AI prefix:', err.message);
                 }
 
                 let dialedPhone = lead.phone.replace(/\D/g, '');
-                if ((dialedPhone.length === 12 || dialedPhone.length === 13) && dialedPhone.startsWith('55')) {
-                    dialedPhone = dialedPhone.substring(2);
-                }
-                const cleanPrefix = prefix ? prefix.replace(/\D/g, '') : '';
-                if (cleanPrefix && !dialedPhone.startsWith(cleanPrefix)) {
-                    dialedPhone = cleanPrefix + dialedPhone;
+                if (prefix && prefix.trim() !== '') {
+                    const trimmedPrefix = prefix.trim();
+                    if ((dialedPhone.length === 12 || dialedPhone.length === 13) && dialedPhone.startsWith('55')) {
+                        if (trimmedPrefix.endsWith('55')) {
+                            dialedPhone = dialedPhone.substring(2);
+                        }
+                    }
+                    const numericPrefix = trimmedPrefix.replace(/\D/g, '');
+                    if (!dialedPhone.startsWith(numericPrefix)) {
+                        dialedPhone = trimmedPrefix + dialedPhone;
+                    }
                 }
 
                 // Dials customer via AMI and routes to triagem-amd-ia context
