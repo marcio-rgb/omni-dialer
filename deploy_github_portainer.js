@@ -215,7 +215,8 @@ async function main() {
                 body: JSON.stringify({
                     StackFileContent: composeContent,
                     Env: [],
-                    Prune: true
+                    Prune: true,
+                    PullImage: true
                 })
             });
 
