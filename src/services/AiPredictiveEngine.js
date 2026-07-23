@@ -755,8 +755,8 @@ export class AiPredictiveEngine {
                     // 2. Set AGENT_ROOM variable on customer channel
                     amiService.setVariable(channelName, 'AGENT_ROOM', roomName);
 
-                    // 3. Redirect customer channel directly to extension 9999 (SIP LiveKit) in cos-all context
-                    amiService.redirectCall(channelName, 'cos-all', '9999', 1);
+                    // 3. Redirect customer channel directly to extension 9999 (SIP LiveKit) in cos-all-custom context
+                    amiService.redirectCall(channelName, 'cos-all-custom', '9999', 1);
 
                     // 7. Save call in call_history as "Atendida"
                     await prisma.call_history.create({
