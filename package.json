@@ -5,7 +5,9 @@
   "main": "src/app.js",
   "scripts": {
     "start": "node src/app.js",
-    "dev": "node --watch src/app.js"
+    "dev": "node --watch src/app.js",
+    "deploy:local": "node deploy_local_pbx_portainer.js",
+    "deploy:prod": "node deploy_github_portainer.js"
   },
   "dependencies": {
     "@elevenlabs/elevenlabs-js": "^2.57.0",
