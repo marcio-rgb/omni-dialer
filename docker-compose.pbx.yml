@@ -1,0 +1,66 @@
+services:
+  portainer_agent:
+    image: portainer/agent:latest
+    container_name: portainer_agent
+    restart: always
+    ports:
+      - "9001:9001"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
+
+  vosk:
+    image: alphacep/kaldi-vosk-server:latest
+    container_name: omni-vosk
+    restart: always
+    command: python3 /opt/vosk-server/websocket/asr_server.py /opt/vosk-model/model
+    ports:
+      - "2700:2700"
+    volumes:
+      - /opt/ominichat/vosk/model:/opt/vosk-model/model
+    environment:
+      - VOSK_SAMPLE_RATE=8000
+
+  asterisk:
+    image: andrius/asterisk:20
+    container_name: omni-asterisk
+    restart: always
+    network_mode: host
+    volumes:
+      - /opt/ominichat/asterisk/conf:/etc/asterisk
+      - /opt/ominichat/asterisk/sounds/custom:/var/lib/asterisk/sounds/custom
+      - /opt/ominichat/asterisk/agi-bin:/var/lib/asterisk/agi-bin
+      - /opt/ominichat/asterisk/monitor:/var/spool/asterisk/monitor
+    depends_on:
+      - vosk
+
+  pbx_api:
+    build:
+      context: /opt/ominichat/pbx_api
+      dockerfile: Dockerfile
+    container_name: omni-pbx-api
+    restart: always
+    network_mode: host
+    volumes:
+      - /opt/ominichat/asterisk/conf:/etc/asterisk
+      - /opt/ominichat/asterisk/sounds/custom:/var/lib/asterisk/sounds/custom
+      - /opt/ominichat/asterisk/agi-bin:/var/lib/asterisk/agi-bin
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - PBX_API_HOST=0.0.0.0
+      - PBX_API_PORT=9443
+      - PBX_API_ADMIN_USER=admin
+      - PBX_API_ADMIN_PASSWORD_HASH=$$2b$$12$$K8aU.CgqLspxNcrZ4s7qE.9zN0iZkFm2JzU5u9y1FvC4m7jJ5uG.a
+      - PBX_API_JWT_SECRET=c79f94eb9a694b7e891c338ad7ff6538b71d9d95f87e5a01bcde
+      - ASTERISK_AMI_HOST=127.0.0.1
+      - ASTERISK_AMI_PORT=5038
+      - ASTERISK_AMI_USER=omnichat_ami
+      - ASTERISK_AMI_PASS=omnichat@ami2026!
+      - ASTERISK_CONF_DIR=/etc/asterisk
+      - ASTERISK_SOUNDS_DIR=/var/lib/asterisk/sounds
+      - VOSK_HOST=127.0.0.1
+      - VOSK_PORT=2700
+      - OMNICHAT_CORE_URL=https://api-omnichat.creditobr.org
+      - DIALER_SERVICE_URL=http://127.0.0.1:3001
+    depends_on:
+      - asterisk

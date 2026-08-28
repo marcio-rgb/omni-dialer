@@ -140,16 +140,19 @@ A cada iteração (função `tick()` em `PredictiveEngine.js`), o discador reali
    * **Contexto:** `triagem-amd`
    * **Variáveis:** Se a opção `Habilitar Triagem Vosk AMD local` estiver desmarcada nas configurações (campo `dialer_use_vosk_amd` no banco), envia a variável de canal `BYPASS_VOSK=1` para instruir o Asterisk a ignorar a análise local de áudio.
 
-#### A Triagem e Answering Machine Detection (AMD)
+#### A Triagem e Answering Machine Detection (AMD) em 3 Estágios
 ```mermaid
 graph TD
     A[Asterisk disca para o Cliente] --> B{Cliente Atendeu?}
     B -- Não (Timeout/Ocupado/Falha) --> C[Grava 'NaoAtendida' no Histórico]
     B -- Sim --> Z{Bypass Vosk AMD?}
     Z -- Sim (Telefonia Externa com AMD) --> G[Gera UserEvent: PredictiveHuman]
-    Z -- Não (Usar Vosk Local) --> D[Executa Script EAGI: vosk_amd.py]
+    Z -- Não (Usar Pipeline Híbrido) --> S0[Estágio 0: Playback custom/alo - 1.6s]
+    S0 --> S1[Estágio 1: AMD Interno Asterisk app_amd]
+    S1 -- Máquina (Silêncio/Tom Contínuo) --> F[Asterisk desliga a chamada]
+    S1 -- Humano / NotSure --> D[Estágio 2: Script EAGI vosk_amd.py]
     D --> E{Classificação Vosk}
-    E -- Máquina (Caixa Postal/URA) --> F[Asterisk desliga a chamada]
+    E -- Máquina (Caixa Postal/URA) --> F
     E -- Humano --> G
     G --> H[Listener do PredictiveEngine no Dialer]
     H --> I{Agentes Ociosos no Redis ZSET?}
@@ -161,11 +164,14 @@ graph TD
     style K fill:#f8d7da,stroke:#dc3545
 ```
 
-1. **Atendimento e Verificação de Bypass:** Quando a chamada é atendida, o Asterisk verifica a variável de canal `${BYPASS_VOSK}`. Se for igual a `"1"`, pula diretamente para o bloco de Humano (`humano`), disparando o evento `UserEvent: PredictiveHuman` sem gerar delay de análise. Caso contrário, segue para o script de EAGI (`vosk_amd.py`).
-2. **Coleta de Áudio:** O script de EAGI lê o áudio bruto da chamada via File Descriptor 3 (PCM linear 8kHz, 16-bit) e envia por WebSocket para o container Docker do Vosk.
-3. **Análise de Voz:** O Vosk realiza o Speech-to-Text em tempo real nos primeiros segundos e o script classifica o áudio analisando palavras-chave de caixas postais (ex: *"deixe seu recado"*, *"caixa de mensagem"*, *"está indisponível"*).
-4. **Desvio de Máquina:** Se detectada máquina, a chamada é finalizada imediatamente pelo dialplan.
-5. **Detecção de Humano:** Se detectado humano, o dialplan gera o evento `UserEvent: PredictiveHuman` com os parâmetros do canal.
+1. **Atendimento e Verificação de Bypass:** Quando a chamada é atendida, o Asterisk verifica a variável de canal `${BYPASS_VOSK}` (controlada via configurações do painel `/admin/dialer` no campo `dialer_use_vosk_amd` / `dialer_ai_use_vosk_amd`). Se for igual a `"1"`, pula diretamente para o bloco de Humano (`humano`), disparando o evento `UserEvent: PredictiveHuman` / `PredictiveAi` sem gerar delay de análise.
+2. **Estágio 0 — Áudio de Estímulo (`custom/alo`):** Reproduz imediatamente um áudio natural de "Alô?" (1.6s em `/var/lib/asterisk/sounds/custom/alo.wav`) para provocar uma resposta imediata do cliente ou ativar mensagens de caixa postal.
+3. **Estágio 1 — AMD Interno do Asterisk (`app_amd.so`):** Análise acústica ultrarrápida ($< 1.5\text{s}$) de frequências e silêncios configurada em `/etc/asterisk/amd.conf`. Descarta instantaneamente mensagens longas e silêncio absoluto.
+4. **Estágio 2 — Coleta de Áudio e Análise Semântica Vosk:** O script de EAGI (`vosk_amd.py`) lê o áudio bruto da chamada via File Descriptor 3 (PCM linear 8kHz, 16-bit) e envia por WebSocket para o container Docker do Vosk, classificando palavras-chave de caixas postais (ex: *"deixe seu recado"*, *"caixa de mensagem"*, *"está indisponível"*).
+5. **Desvio de Máquina:** Se detectada máquina em qualquer dos estágios, a chamada é finalizada imediatamente pelo dialplan.
+6. **Detecção de Humano:** Se detectado humano, o dialplan gera o evento `UserEvent: PredictiveHuman` (ou `PredictiveAi`) com os parâmetros do canal.
+
+> Para mais detalhes sobre a integração com o Vosk STT, consulte [vosk_amd_integration.md](file:///home/marcio/ominichat/dialer/.agent/vosk_amd_integration.md) e [dialer-to-pbx.md](file:///home/marcio/ominichat/ecosystem/dialer-to-pbx.md).
 
 #### O Fluxo de Atendimento do Humano (`PredictiveHuman`):
 * O listener em `PredictiveEngine.js` captura o evento.
@@ -196,22 +202,33 @@ Os dialplans do servidor Asterisk (`84.247.135.255` em `/etc/asterisk/vitalpbx/e
 Executado quando uma chamada preditiva é atendida pelo destino:
 ```asterisk
 [triagem-amd]
-exten => s,1,NoOp(Chamada atendida pelo cliente. Iniciando triagem AMD...)
+exten => s,1,NoOp(Chamada atendida. Iniciando pipeline de estimulo e triagem AMD...)
 same => n,ExecIf($[ "${REC_STARTED}" != "yes" ]?Set(REC_FILENAME=/var/spool/asterisk/monitor/${STRFTIME(${EPOCH},,%Y/%m/%d)}/${STRFTIME(${EPOCH},,%H%M%S)}-PRED-${PHONE}-${UNIQUEID}))
 same => n,ExecIf($[ "${REC_STARTED}" != "yes" ]?MixMonitor(${REC_FILENAME}.wav,b))
 same => n,ExecIf($[ "${REC_STARTED}" != "yes" ]?Set(__REC_STARTED=yes))
 
-; Respeita a configuracao /admin/dialer: dialer_use_vosk_amd = false (BYPASS_VOSK = 1)
+; 1. Verificação de Bypass manual configurado no painel do discador
 same => n,GotoIf($["${BYPASS_VOSK}" = "1"]?humano)
 
+; 2. Estágio 0: Reprodução do Áudio de Estímulo "Alô?"
+same => n,Playback(custom/alo)
+
+; 3. Estágio 1: Análise acústica rápida com AMD Interno do Asterisk
+same => n,AMD()
+same => n,NoOp(AMD Interno Status: ${AMDSTATUS} - Causa: ${AMDCAUSE})
+same => n,GotoIf($["${AMDSTATUS}" = "MACHINE"]?maquina)
+
+; 4. Estágio 2: Análise Semântica por Reconhecimento de Fala Vosk
 same => n,EAGI(vosk_amd.py)
-same => n,NoOp(Resultado do Vosk AMD: ${VOSK_AMD_STATUS})
+same => n,NoOp(Vosk AMD Status: ${VOSK_AMD_STATUS})
 same => n,GotoIf($["${VOSK_AMD_STATUS}" = "HUMAN"]?humano:maquina)
 
-same => n(maquina),NoOp(Detectado Caixa Postal/Robo. Desligando...)
+; Destino: Caixa Postal / Robô Detectado
+same => n(maquina),NoOp(Classificado como MAQUINA (${AMDCAUSE} / ${VOSK_AMD_STATUS}). Desligando canal...)
 same => n,Hangup()
 
-same => n(humano),NoOp(Humano detectado! Emitindo evento conforme IS_AI_CALL: ${IS_AI_CALL})
+; Destino: Humano Confirmado
+same => n(humano),NoOp(HUMANO Confirmado! Emitindo evento conforme IS_AI_CALL: ${IS_AI_CALL})
 same => n,ExecIf($[ "${IS_AI_CALL}" = "1" ]?UserEvent(PredictiveAi,ChannelId: ${CHANNEL},Phone: ${PHONE},LeadId: ${LEAD_ID},CampaignId: ${CAMPAIGN_ID}))
 same => n,ExecIf($[ "${IS_AI_CALL}" != "1" ]?UserEvent(PredictiveHuman,ChannelId: ${CHANNEL},Phone: ${PHONE},LeadId: ${LEAD_ID},CampaignId: ${CAMPAIGN_ID}))
 same => n,Wait(5)

@@ -297,31 +297,52 @@ if __name__ == "__main__":
 
 ---
 
-## 4. Componente 3: Dialplan do Asterisk
+## 4. Componente 3: Dialplan do Asterisk e Pipeline em 3 Estágios
 
-O Dialplan foi modificado para substituir a chamada da aplicação clássica de AMD do Asterisk pela execução do nosso script.
+O Asterisk utiliza uma abordagem de **Pipeline em 3 Estágios** que combina estímulo de áudio, AMD acústico nativo e AMD semântico via Vosk:
+1. **Estágio 0:** Reprodução do áudio natural de "Alô?" (`/var/lib/asterisk/sounds/custom/alo.wav` / 1.6s).
+2. **Estágio 1:** Análise acústica ultrarrápida ($< 1.5\text{s}$) com AMD nativo do Asterisk (`app_amd.so`).
+3. **Estágio 2:** Análise semântica por reconhecimento de fala via script EAGI `vosk_amd.py`.
 
 *   **Caminho do arquivo:** `/etc/asterisk/vitalpbx/extensions__00custom.conf`
-*   **Bloco modificado (`[triagem-amd]`):**
+*   **Bloco (`[triagem-amd]`):**
 
 ```asterisk
 [triagem-amd]
-exten => s,1,NoOp(Chamada atendida pelo cliente. Iniciando triagem AMD com Vosk...)
+exten => s,1,NoOp(Chamada atendida. Iniciando pipeline de estimulo e triagem AMD...)
+same => n,ExecIf($[ "${REC_STARTED}" != "yes" ]?Set(REC_FILENAME=/var/spool/asterisk/monitor/${STRFTIME(${EPOCH},,%Y/%m/%d)}/${STRFTIME(${EPOCH},,%H%M%S)}-PRED-${PHONE}-${UNIQUEID}))
+same => n,ExecIf($[ "${REC_STARTED}" != "yes" ]?MixMonitor(${REC_FILENAME}.wav,b))
+same => n,ExecIf($[ "${REC_STARTED}" != "yes" ]?Set(__REC_STARTED=yes))
+
+; 1. Verificação de Bypass manual configurado no painel do discador (BYPASS_VOSK = 1)
 same => n,GotoIf($["${BYPASS_VOSK}" = "1"]?humano)
+
+; 2. Estágio 0: Reprodução do Áudio de Estímulo "Alô?"
+same => n,Playback(custom/alo)
+
+; 3. Estágio 1: Análise acústica rápida com AMD Interno do Asterisk
+same => n,AMD()
+same => n,NoOp(AMD Interno Status: ${AMDSTATUS} - Causa: ${AMDCAUSE})
+same => n,GotoIf($["${AMDSTATUS}" = "MACHINE"]?maquina)
+
+; 4. Estágio 2: Análise Semântica por Reconhecimento de Fala Vosk
 same => n,EAGI(vosk_amd.py)
-same => n,NoOp(Resultado do Vosk AMD: ${VOSK_AMD_STATUS})
+same => n,NoOp(Vosk AMD Status: ${VOSK_AMD_STATUS})
 same => n,GotoIf($["${VOSK_AMD_STATUS}" = "HUMAN"]?humano:maquina)
 
-; Se for Caixa Postal ou Robô (MACHINE)
-same => n(maquina),NoOp(Detectado Caixa Postal/Robo. Desligando...)
+; Destino: Caixa Postal / Robô Detectado
+same => n(maquina),NoOp(Classificado como MAQUINA (${AMDCAUSE} / ${VOSK_AMD_STATUS}). Desligando canal...)
 same => n,Hangup()
 
-; Se for uma pessoa real (HUMAN)
-same => n(humano),NoOp(Humano detectado! Notificando o Dialer Backend...)
-same => n,UserEvent(PredictiveHuman,ChannelId: ${CHANNEL},Phone: ${PHONE},LeadId: ${LEAD_ID},CampaignId: ${CAMPAIGN_ID})
+; Destino: Humano Confirmado
+same => n(humano),NoOp(HUMANO Confirmado! Emitindo evento conforme IS_AI_CALL: ${IS_AI_CALL})
+same => n,ExecIf($[ "${IS_AI_CALL}" = "1" ]?UserEvent(PredictiveAi,ChannelId: ${CHANNEL},Phone: ${PHONE},LeadId: ${LEAD_ID},CampaignId: ${CAMPAIGN_ID}))
+same => n,ExecIf($[ "${IS_AI_CALL}" != "1" ]?UserEvent(PredictiveHuman,ChannelId: ${CHANNEL},Phone: ${PHONE},LeadId: ${LEAD_ID},CampaignId: ${CAMPAIGN_ID}))
 same => n,Wait(5)
 same => n,Hangup()
 ```
+
+> Para a visão arquitetural completa de variáveis AMI, LiveKit e roteamento de troncos, consulte [dialer-to-pbx.md](file:///home/marcio/ominichat/ecosystem/dialer-to-pbx.md).
 
 ---
 

@@ -24,7 +24,7 @@ function getGitHubConfig() {
     }
     // Fallback
     return {
-        token: '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',
+        token: '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',
         owner: 'marcio-rgb',
         repo: 'omni-dialer'
     };
