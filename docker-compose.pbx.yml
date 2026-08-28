@@ -37,6 +37,7 @@ services:
   pbx_api:
     image: ominichat-pbx_api:latest
     container_name: omni-pbx-api
+    pull_policy: never
     restart: always
     network_mode: host
     volumes:
