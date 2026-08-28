@@ -63,3 +63,27 @@ services:
       - DIALER_SERVICE_URL=http://127.0.0.1:3001
     depends_on:
       - asterisk
+
+  dialer:
+    image: ghcr.io/marcio-rgb/omni-dialer:latest
+    container_name: omni-dialer
+    restart: always
+    network_mode: host
+    environment:
+      - PORT=3001
+      - DATABASE_URL=postgresql://postgres:ojr6DNM25InIg3qoYI4nbUL5Cx04iCiCn1122@84.247.135.255:5432/omnichat_db?schema=public
+      - REDIS_HOST=84.247.135.255
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=ojr6DNM25InIg3qoYI4nbUL5Cx04iCiC
+      - ASTERISK_AMI_HOST=127.0.0.1
+      - ASTERISK_AMI_PORT=5038
+      - ASTERISK_AMI_USER=omnichat_ami
+      - ASTERISK_AMI_PASSWORD=omnichat@ami2026!
+      - OMNICHAT_CORE_URL=https://api-omnichat.creditobr.org
+      - PBX_API_URL=http://127.0.0.1:9443
+      - LIVEKIT_URL=https://live.creditobr.org
+      - LIVEKIT_API_KEY=omnichat_livekit_key
+      - LIVEKIT_API_SECRET=OmniChat_LiveKit_Secret_Key_2026_SecurePass!987
+      - LIVEKIT_SIP_HOST=live.creditobr.org:5060
+    depends_on:
+      - pbx_api

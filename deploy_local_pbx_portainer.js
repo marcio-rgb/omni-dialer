@@ -74,13 +74,21 @@ async function main() {
         const stacks = await stacksRes.json();
         const existingStack = stacks.find(s => s.Name === stackName);
 
+        const authObj = {
+            username: 'marcio-rgb',
+            password: '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',
+            serveraddress: 'ghcr.io'
+        };
+        const authHeader = Buffer.from(JSON.stringify(authObj)).toString('base64');
+
         if (existingStack) {
             console.log(`   - Atualizando Stack existente ID ${existingStack.Id}...`);
             const updateRes = await fetch(`${config.url}/stacks/${existingStack.Id}?endpointId=${endpointId}`, {
                 method: 'PUT',
                 headers: {
                     'X-API-Key': config.key,
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'X-Registry-Auth': authHeader
                 },
                 body: JSON.stringify({
                     stackFileContent: composeContent,
@@ -101,7 +109,8 @@ async function main() {
                 method: 'POST',
                 headers: {
                     'X-API-Key': config.key,
-                    'Content-Type': 'application/json'
+                    'Content-Type': 'application/json',
+                    'X-Registry-Auth': authHeader
                 },
                 body: JSON.stringify({
                     name: stackName,
