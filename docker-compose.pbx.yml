@@ -35,9 +35,7 @@ services:
       - vosk
 
   pbx_api:
-    build:
-      context: /opt/ominichat/pbx_api
-      dockerfile: Dockerfile
+    image: ominichat-pbx_api:latest
     container_name: omni-pbx-api
     restart: always
     network_mode: host
