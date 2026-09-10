@@ -7,7 +7,7 @@ from services.agent_store import agent_store
 router = APIRouter(prefix="/api/v1/dialer/agents", tags=["Sincronização de Agentes"])
 
 class AgentStatusPayload(BaseModel):
-    agent_id: int = Field(..., description="ID numérico do usuário/operador")
+    agent_id: Any = Field(..., description="ID do usuário/operador (número ou string)")
     room_name: Optional[str] = Field(None, description="Nome da sala LiveKit (ex: sala_agente_4)")
     status: str = Field("idle", description="Estado: idle, busy, paused, offline")
     campaign_ids: Optional[List[int]] = Field(default_factory=list, description="IDs das campanhas associadas")

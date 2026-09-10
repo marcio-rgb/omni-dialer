@@ -1,10 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
+from typing import Optional
 from auth.security import verify_password, create_access_token, get_current_user
 from config import settings
 
 router = APIRouter(prefix="/api/v1/auth", tags=["Autenticação"])
+
+class LoginPayload(BaseModel):
+    username: str
+    password: str
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -25,6 +30,21 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
         )
     
     access_token = create_access_token(data={"sub": form_data.username})
+    return TokenResponse(
+        access_token=access_token,
+        token_type="bearer",
+        expires_in_minutes=settings.JWT_EXPIRATION_MINUTES
+    )
+
+@router.post("/login", response_model=TokenResponse)
+async def login_json(payload: LoginPayload):
+    if payload.username != settings.ADMIN_USERNAME or not verify_password(payload.password, settings.ADMIN_PASSWORD_HASH):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usuário ou senha incorretos."
+        )
+    
+    access_token = create_access_token(data={"sub": payload.username})
     return TokenResponse(
         access_token=access_token,
         token_type="bearer",

@@ -25,10 +25,12 @@ services:
       - LIVEKIT_URL=http://livekit:7880
       - LIVEKIT_API_KEY=omnichat_livekit_key
       - LIVEKIT_API_SECRET=OmniChat_LiveKit_Secret_Key_2026_SecurePass!987
-      - VITALPBX_API_URL=http://192.168.1.100/api/v2
-      - VITALPBX_API_KEY=api_key_here
-      - VITALPBX_TRUNK=Local/sip:SHAMPATEL
-      - VITALPBX_CONTEXT=cos-all
+      - ASTERISK_HOST=192.168.0.44
+      - AMI_HOST=192.168.0.44
+      - AMI_PORT=5038
+      - AMI_USER=Omnichat
+      - AMI_SECRET=ypnqYP7EHNtYFkqww23243rwew423
+      - AMI_CONTEXT=cos-all
       - FORCE_RECREATE=1
       - ELEVEN_API_KEY=${ELEVEN_API_KEY}
     command: sh -c "apt-get update -y && apt-get install -y openssl && mkdir -p node_modules && find node_modules -mindepth 1 -delete && npm install && npx prisma generate && npm start"

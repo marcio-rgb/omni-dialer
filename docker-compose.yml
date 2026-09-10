@@ -11,20 +11,19 @@ services:
       - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=ojr6DNM25InIg3qoYI4nbUL5Cx04iCiC
-      - LIVEKIT_URL=http://livekit_livekit:7880
+      - LIVEKIT_URL=http://livekit:7880
       - LIVEKIT_API_KEY=devkey
       - LIVEKIT_API_SECRET=secret
       - LIVEKIT_SIP_HOST=live.creditobr.org:5060
-      - VITALPBX_API_URL=https://pbx.creditobr.com.br/api/v2
-      - VITALPBX_API_KEY=8302cc7693df6b3795f01ad15d616e11
-      - VITALPBX_TRUNK=Local/sip:SHAMPATEL
-      - VITALPBX_CONTEXT=cos-all
+      - ASTERISK_HOST=pbx.creditobr.com.br
       - AMI_HOST=pbx.creditobr.com.br
       - AMI_PORT=5038
       - AMI_USER=Omnichat
       - AMI_SECRET=ypnqYP7EHNtYFkqww23243rwew423
+      - AMI_CONTEXT=cos-all
+      - AMI_TRUNK=Local/sip:SHAMPATEL
       - DIALER_OMNICHAT_SERVER_URL=http://omnichat_server:3000
-      - UPDATE_TIMESTAMP=1787905598
+      - UPDATE_TIMESTAMP=1789034460
     ports:
       - "3001:3001"
     networks:

@@ -688,18 +688,10 @@ export class AiPredictiveEngine {
                     // Find or create Open Conversation
                     const conversation = await getOrCreateConversation(contact, agentId, cleanPhone);
 
-                    // Create active call record in DB calls table
+                    // Create active call record in DB calls table with unique room name to preserve call history
                     const callId = crypto.randomUUID();
-                    const roomName = `sala_agente_${agentId}_${cleanPhone}`;
-
-                    // Clean up any old call with the same room_name to prevent unique constraint violation
-                    try {
-                        await prisma.calls.deleteMany({
-                            where: { room_name: roomName }
-                        });
-                    } catch (delErr) {
-                        console.error(`[AiPredictiveEngine] Error deleting old call for room ${roomName}:`, delErr.message);
-                    }
+                    const callTimestamp = Date.now();
+                    const roomName = `sala_agente_${agentId}_${cleanPhone}_${callTimestamp}`;
 
                     await prisma.calls.create({
                         data: {

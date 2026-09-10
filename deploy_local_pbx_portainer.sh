@@ -1,6 +1,6 @@
 #!/bin/bash
 # ========================================================
-#       PUBLISHING OMNI-DIALER TO GITHUB & PORTAINER (PYTHON)
+#       LOCAL PBX PORTAINER DEPLOY (PYTHON)
 # ========================================================
 
 set -e
@@ -13,5 +13,5 @@ fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Executa a automação em Python encaminhando argumentos (ex: mensagem de commit)
-python3 "$SCRIPT_DIR/deploy_github_portainer.py" "$@"
+# Executa a automação em Python
+python3 "$SCRIPT_DIR/deploy_local_pbx_portainer.py" "$@"

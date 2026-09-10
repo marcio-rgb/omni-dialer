@@ -783,59 +783,158 @@ export default async function callRoutes(fastify, opts) {
     });
 
     /**
-     * POST /handoff
-     * Transfere uma chamada ativa da IA para um agente humano livre.
+     * POST /hangup
+     * Encerra explicitamente o canal de chamada ativa de um agente ou sala no Asterisk via AMI.
      */
-    fastify.post('/handoff', async (request, reply) => {
-        const { roomName, agentId } = request.body || {};
+    fastify.post('/hangup', async (request, reply) => {
+        const { agentId, roomName } = request.body || {};
 
-        if (!roomName || !agentId) {
+        if (!agentId && !roomName) {
             reply.code(400);
-            return { error: 'roomName and agentId are required' };
+            return { error: 'agentId ou roomName é obrigatório para desligar a chamada' };
         }
 
         try {
-            console.log(`[Handoff] Request received to transfer room ${roomName} to human agent ${agentId}`);
+            console.log(`[HangupAPI] Solicitação de encerramento para Agente: ${agentId || 'N/A'}, Sala: ${roomName || 'N/A'}`);
+            let channelName = null;
 
-            // 1. Check if the human agent has WebRTC active
-            const webrtcActive = await redisClient.get(`dialer:agent_webrtc_active:${agentId}`);
-            if (webrtcActive !== 'true') {
-                reply.code(400);
-                return { error: `Agent ${agentId} does not have an active WebRTC session.` };
+            if (agentId) {
+                channelName = await redisClient.get(`dialer:active_call_channel:${agentId}`);
             }
 
-            // 2. Retrieve customer's Asterisk channel by roomName
-            const channelName = await redisClient.get(`dialer:room_channel:${roomName}`);
-            if (!channelName) {
-                reply.code(404);
-                return { error: `No active Asterisk channel found for room: ${roomName}` };
+            if (!channelName && roomName) {
+                channelName = await redisClient.get(`dialer:room_channel:${roomName}`);
             }
 
-            console.log(`[Handoff] Found customer channel ${channelName} for room ${roomName}. Performing handoff to agent ${agentId}...`);
+            if (channelName) {
+                console.log(`[HangupAPI] Executando desligamento do canal Asterisk: ${channelName}`);
+                amiService.hangupCall(channelName);
 
-            // 3. Set the new agent's room name on the channel variable
-            const targetRoomName = `sala_agente_${agentId}`;
-            amiService.setVariable(channelName, 'AGENT_ROOM', targetRoomName);
-
-            // 4. Redirect the channel back to extension 9999 (LiveKit SIP trunk) in context 'cos-all-custom'
-            // This will cause Asterisk to tear down the SIP call to the AI room and dial the human room.
-            amiService.redirectCall(channelName, 'cos-all-custom', '9999', 1);
-
-            // 5. Update Redis mappings for the new agent
-            await redisClient.set(`dialer:active_call_channel:${agentId}`, channelName, 'EX', 7200);
-            await redisClient.set(`dialer:room_channel:${targetRoomName}`, channelName, 'EX', 7200);
-
-            // Remove old mappings
-            const oldAgentId = await redisClient.get(`dialer:room_agent:${roomName}`);
-            if (oldAgentId) {
-                await redisClient.del(`dialer:active_call_channel:${oldAgentId}`);
+                if (agentId) {
+                    await redisClient.del(`dialer:active_call_channel:${agentId}`);
+                }
+                if (roomName) {
+                    await redisClient.del(`dialer:room_channel:${roomName}`);
+                }
+            } else {
+                console.warn(`[HangupAPI] Nenhum canal ativo localizado em cache para Agente: ${agentId}, Sala: ${roomName}`);
             }
-            await redisClient.del(`dialer:room_channel:${roomName}`);
-            await redisClient.del(`dialer:room_agent:${roomName}`);
 
-            return { success: true, message: `Redirected customer channel to agent ${agentId} room.` };
+            return { success: true, message: 'Comando de encerramento enviado ao PBX com sucesso.' };
         } catch (error) {
-            console.error('[Handoff] Error transferring call:', error);
+            console.error('[HangupAPI] Erro ao encerrar chamada:', error);
+            reply.code(500);
+            return { error: 'Falha ao encerrar chamada no PBX', details: error.message };
+        }
+    });
+
+    /**
+     * POST /handoff
+     * Transfere uma chamada ativa da IA para um agente humano livre dentro da MESMA sala LiveKit (Zero Gap de Áudio).
+     */
+    fastify.post('/handoff', async (request, reply) => {
+        const { roomName, agentId: requestedAgentId } = request.body || {};
+
+        if (!roomName) {
+            reply.code(400);
+            return { error: 'roomName is required' };
+        }
+
+        try {
+            console.log(`[Handoff Intra-LiveKit] Transfer request for room: ${roomName} (Target: ${requestedAgentId || 'auto'})`);
+
+            // 1. Retrieve customer's Asterisk channel by roomName
+            const channelName = await redisClient.get(`dialer:room_channel:${roomName}`);
+
+            // 2. Select target agent (specific or auto-pop from idle queue)
+            let targetAgentId = requestedAgentId;
+            if (targetAgentId) {
+                const webrtcActive = await redisClient.get(`dialer:agent_webrtc_active:${targetAgentId}`);
+                if (webrtcActive !== 'true') {
+                    reply.code(400);
+                    return { error: `Agent ${targetAgentId} does not have an active WebRTC session.` };
+                }
+                await redisClient.zrem('dialer:idle_agents', targetAgentId);
+            } else {
+                const idleAgents = await redisClient.zrange('dialer:idle_agents', 0, -1);
+                for (const id of idleAgents) {
+                    const webrtcActive = await redisClient.get(`dialer:agent_webrtc_active:${id}`);
+                    if (webrtcActive === 'true') {
+                        const removed = await redisClient.zrem('dialer:idle_agents', id);
+                        if (removed === 1) {
+                            targetAgentId = id;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!targetAgentId) {
+                reply.code(503);
+                return { error: 'No human agents with active WebRTC sessions are available for handoff.' };
+            }
+
+            // 3. Fetch agent info
+            const agentUser = await prisma.users.findUnique({
+                where: { id: targetAgentId },
+                select: { id: true, name: true }
+            });
+            const agentName = agentUser?.name || `Agente ${targetAgentId}`;
+
+            // 4. Generate LiveKit token for the human agent for the SAME active room
+            const agentToken = await LiveKitService.generateToken(roomName, agentName, true);
+
+            // 5. Update agent status in database
+            await prisma.users.update({
+                where: { id: targetAgentId },
+                data: {
+                    agent_status: 'ocupado',
+                    agent_status_reason: 'Handoff IA'
+                }
+            }).catch(e => console.error('[Handoff] Error updating agent status:', e.message));
+
+            // 6. Notify the human agent via WebSocket to enter the active room immediately
+            const socket = activeSockets.get(targetAgentId);
+            if (socket && socket.readyState === 1) {
+                console.log(`[Handoff Intra-LiveKit] Emitting agent.incoming_handoff to Agent ${targetAgentId} for room ${roomName}`);
+                socket.send(JSON.stringify({
+                    event: 'agent.incoming_handoff',
+                    data: {
+                        token: agentToken,
+                        room_name: roomName,
+                        is_handoff: true,
+                        agent_id: targetAgentId
+                    }
+                }));
+            } else {
+                console.warn(`[Handoff Intra-LiveKit] Active WebSocket not found for Agent ${targetAgentId}.`);
+            }
+
+            // 7. Update Redis mappings
+            if (channelName) {
+                await redisClient.set(`dialer:active_call_channel:${targetAgentId}`, channelName, 'EX', 7200);
+            }
+            await redisClient.set(`dialer:room_agent:${roomName}`, targetAgentId, 'EX', 7200);
+
+            // 8. Publish handoff event for dashboard real-time monitoring
+            await redisClient.publish('dialer:events', JSON.stringify({
+                phone: roomName,
+                status: 'handoff_completed',
+                label: `Transferido para ${agentName}`,
+                operator: agentName,
+                time: new Date().toLocaleTimeString('pt-BR')
+            })).catch(() => {});
+
+            return {
+                success: true,
+                mode: 'intra_livekit',
+                roomName,
+                agentId: targetAgentId,
+                agentName,
+                token: agentToken
+            };
+        } catch (error) {
+            console.error('[Handoff Intra-LiveKit] Error transferring call:', error);
             reply.code(500);
             return { error: 'Internal server error during call handoff', details: error.message };
         }
@@ -843,8 +942,8 @@ export default async function callRoutes(fastify, opts) {
 
     /**
      * POST /fallback
-     * Acionado pelo Python worker quando há falha crítica na conexão com a ElevenLabs.
-     * Transfere o cliente automaticamente para a fila humana / contingência.
+     * Acionado pelo Python worker quando há falha crítica de conexão de IA.
+     * Transfere o cliente automaticamente para a fila humana na mesma sala LiveKit.
      */
     fastify.post('/fallback', async (request, reply) => {
         const { roomName, error } = request.body || {};
@@ -855,22 +954,16 @@ export default async function callRoutes(fastify, opts) {
         }
 
         try {
-            console.log(`[Fallback] Critical error reported by worker in room ${roomName}: ${error}. Initiating fallback to human agent.`);
+            console.log(`[Fallback Intra-LiveKit] Fallback requested for room ${roomName}: ${error}`);
 
-            // 1. Retrieve customer's Asterisk channel
             const channelName = await redisClient.get(`dialer:room_channel:${roomName}`);
-            if (!channelName) {
-                reply.code(404);
-                return { error: `No active Asterisk channel found for room: ${roomName}` };
-            }
 
-            // 2. Select a free human agent who has WebRTC active
+            // 1. Select a free human agent with WebRTC active
             const idleAgents = await redisClient.zrange('dialer:idle_agents', 0, -1);
             let targetAgentId = null;
             for (const id of idleAgents) {
                 const webrtcActive = await redisClient.get(`dialer:agent_webrtc_active:${id}`);
                 if (webrtcActive === 'true') {
-                    // Try to pop agent atomically
                     const removed = await redisClient.zrem('dialer:idle_agents', id);
                     if (removed === 1) {
                         targetAgentId = id;
@@ -880,37 +973,106 @@ export default async function callRoutes(fastify, opts) {
             }
 
             if (!targetAgentId) {
-                console.warn(`[Fallback] No human agents with active WebRTC sessions are available for fallback. Hanging up channel ${channelName}.`);
-                amiService.hangupCall(channelName);
+                console.warn(`[Fallback] No human agents available for fallback in room ${roomName}.`);
+                if (channelName) {
+                    amiService.hangupCall(channelName);
+                }
                 return { success: false, reason: 'No available human agents. Call hung up.' };
             }
 
-            console.log(`[Fallback] Found available human agent ${targetAgentId}. Transferring customer channel ${channelName}...`);
+            // 2. Fetch agent info and generate token for the SAME room
+            const agentUser = await prisma.users.findUnique({
+                where: { id: targetAgentId },
+                select: { id: true, name: true }
+            });
+            const agentName = agentUser?.name || `Agente ${targetAgentId}`;
+            const agentToken = await LiveKitService.generateToken(roomName, agentName, true);
 
-            // 3. Set the new agent's room name on the channel variable
-            const targetRoomName = `sala_agente_${targetAgentId}`;
-            amiService.setVariable(channelName, 'AGENT_ROOM', targetRoomName);
+            // 3. Update agent status in DB
+            await prisma.users.update({
+                where: { id: targetAgentId },
+                data: {
+                    agent_status: 'ocupado',
+                    agent_status_reason: 'Fallback IA'
+                }
+            }).catch(() => {});
 
-            // 4. Redirect the channel back to extension 9999 in context 'cos-all-custom'
-            amiService.redirectCall(channelName, 'cos-all-custom', '9999', 1);
+            // 4. Emit handoff event to the operator
+            const socket = activeSockets.get(targetAgentId);
+            if (socket && socket.readyState === 1) {
+                console.log(`[Fallback Intra-LiveKit] Emitting agent.incoming_handoff to Agent ${targetAgentId}`);
+                socket.send(JSON.stringify({
+                    event: 'agent.incoming_handoff',
+                    data: {
+                        token: agentToken,
+                        room_name: roomName,
+                        is_fallback: true,
+                        agent_id: targetAgentId
+                    }
+                }));
+            }
 
             // 5. Update Redis mappings
-            await redisClient.set(`dialer:active_call_channel:${targetAgentId}`, channelName, 'EX', 7200);
-            await redisClient.set(`dialer:room_channel:${targetRoomName}`, channelName, 'EX', 7200);
-
-            // Remove old mappings
-            const oldAgentId = await redisClient.get(`dialer:room_agent:${roomName}`);
-            if (oldAgentId) {
-                await redisClient.del(`dialer:active_call_channel:${oldAgentId}`);
+            if (channelName) {
+                await redisClient.set(`dialer:active_call_channel:${targetAgentId}`, channelName, 'EX', 7200);
             }
-            await redisClient.del(`dialer:room_channel:${roomName}`);
-            await redisClient.del(`dialer:room_agent:${roomName}`);
+            await redisClient.set(`dialer:room_agent:${roomName}`, targetAgentId, 'EX', 7200);
 
-            return { success: true, message: `Successfully fell back to human agent ${targetAgentId}.` };
+            return {
+                success: true,
+                mode: 'intra_livekit',
+                roomName,
+                agentId: targetAgentId,
+                agentName
+            };
         } catch (err) {
-            console.error('[Fallback] Error during fallback processing:', err);
+            console.error('[Fallback Intra-LiveKit] Error during fallback:', err);
             reply.code(500);
             return { error: 'Internal server error during fallback', details: err.message };
+        }
+    });
+
+    /**
+     * POST /webhooks/livekit-events
+     * Recebe eventos de ciclo de vida das salas do LiveKit Server para Garbage Collection imediato.
+     */
+    fastify.post('/webhooks/livekit-events', async (request, reply) => {
+        try {
+            const event = request.body || {};
+            const eventType = event.event;
+            const room = event.room;
+            const roomName = room?.name;
+
+            if (!roomName) {
+                return { success: true, ignored: true };
+            }
+
+            console.log(`[LiveKit Webhook] Event: ${eventType} for room: ${roomName}`);
+
+            if (eventType === 'room_finished' || eventType === 'participant_left') {
+                const numParticipants = room?.numParticipants || 0;
+                if (eventType === 'room_finished' || numParticipants <= 0) {
+                    console.log(`[LiveKit Webhook] Room ${roomName} finished/empty. Cleaning up state...`);
+
+                    const agentId = await redisClient.get(`dialer:room_agent:${roomName}`);
+                    if (agentId) {
+                        await redisClient.del(`dialer:active_call_channel:${agentId}`);
+                    }
+                    await redisClient.del(`dialer:room_channel:${roomName}`);
+                    await redisClient.del(`dialer:room_agent:${roomName}`);
+
+                    // Mark active call as completed in database
+                    await prisma.calls.updateMany({
+                        where: { room_name: roomName, status: 'active' },
+                        data: { status: 'completed' }
+                    }).catch(() => {});
+                }
+            }
+
+            return { success: true };
+        } catch (err) {
+            console.error('[LiveKit Webhook] Error processing webhook event:', err.message);
+            return { success: false, error: err.message };
         }
     });
 
